@@ -73,11 +73,12 @@ public final class QuickModeOverlay {
     private static double dragStartX = 0;
 
     // Filter chips (dynamic: rebuilt when recipes load)
-    private static List<String> filterOptions = new ArrayList<>(List.of("All", "@minecraft"));
+    private static List<String> filterOptions = new ArrayList<>(List.of("", "@minecraft"));
     private static List<String> filterLabels  = new ArrayList<>(List.of("All", "Vanilla"));
     private static int activeFilter = 0;
     private static int filterScrollOffset = 0;
     private static final int FILTER_HEIGHT = 12;
+    private static boolean filtersInitialized = false;
 
     // Actionbar feedback timer
     private static String feedbackMessage = null;
@@ -146,7 +147,7 @@ public final class QuickModeOverlay {
         filterOptions = new ArrayList<>();
         filterLabels = new ArrayList<>();
         // Fixed entries
-        filterOptions.add("All");
+        filterOptions.add("");
         filterLabels.add("All");
         filterOptions.add("@minecraft");
         filterLabels.add("Vanilla");
@@ -493,6 +494,11 @@ public final class QuickModeOverlay {
     // ── Rendering ────────────────────────────────────────────────────────
 
     private static void drawOverlay(GuiGraphicsExtractor gfx, Screen screen, int mouseX, int mouseY) {
+        if (!filtersInitialized) {
+            rebuildFilters();
+            refreshSearch();
+            filtersInitialized = true;
+        }
         Font font = screen.getFont();
         int panelX = panelX(screen);
         int panelY = PADDING;
