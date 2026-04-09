@@ -84,12 +84,12 @@ public final class AtlasFabricClient implements ClientModInitializer {
 
         // Key binding tick handler for opening screens
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
-            if (mc.level == null) return;
-
             if (AtlasKeyBindings.openAtlas.consumeClick()) {
                 mc.setScreen(new AtlasScreen());
             }
-            if (AtlasKeyBindings.toggleQuickMode.consumeClick()) {
+
+            // Quick mode only makes sense in-world on container screens.
+            if (mc.level != null && AtlasKeyBindings.toggleQuickMode.consumeClick()) {
                 QuickModeOverlay.toggle();
             }
         });

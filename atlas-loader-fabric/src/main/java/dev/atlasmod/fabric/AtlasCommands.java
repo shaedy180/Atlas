@@ -8,6 +8,7 @@ import dev.atlasmod.core.recipe.RecipeNode;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
 import java.util.*;
@@ -27,6 +28,10 @@ public final class AtlasCommands {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             dispatcher.register(
                 ClientCommands.literal("atlas")
+                    .then(ClientCommands.literal("open")
+                        .executes(ctx -> runOpen(ctx.getSource())))
+                    .then(ClientCommands.literal("quick")
+                        .executes(ctx -> runQuickToggle(ctx.getSource())))
                     .then(ClientCommands.literal("debug")
                         .executes(ctx -> runDebug(ctx.getSource())))
                     .then(ClientCommands.literal("stats")
@@ -35,6 +40,20 @@ public final class AtlasCommands {
                         .executes(ctx -> runReload(ctx.getSource())))
             );
         });
+    }
+
+    private static int runOpen(FabricClientCommandSource source) {
+        Minecraft client = source.getClient();
+        client.setScreen(new AtlasScreen());
+        source.sendFeedback(Component.literal("§a[Atlas] Opened Deep Mode."));
+        return 1;
+    }
+
+    private static int runQuickToggle(FabricClientCommandSource source) {
+        QuickModeOverlay.toggle();
+        source.sendFeedback(Component.literal("§a[Atlas] Quick Mode "
+                + (QuickModeOverlay.isEnabled() ? "enabled" : "disabled") + "."));
+        return 1;
     }
 
     // ── /atlas debug ─────────────────────────────────────────────────────
