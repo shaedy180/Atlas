@@ -17,6 +17,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.TagKey;
+import net.minecraft.util.Util;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
@@ -49,6 +50,15 @@ public class AtlasScreen extends Screen {
     private static final int HEADER_COLOR = 0xFFE0E0FF;
     private static final int TEXT_COLOR = 0xFFCCCCCC;
     private static final int HIGHLIGHT_COLOR = 0x40FFFFFF;
+
+    private static final String ISSUES_URL = "https://github.com/shaedy180/Atlas/issues";
+
+    // Filter chips
+    private static final String[] FILTER_OPTIONS = {"", "@minecraft"};
+    private static final String[] FILTER_LABELS  = {"All", "Vanilla"};
+    private int activeFilter = 0;
+
+    private boolean showHelp = false;
 
     private EditBox searchBox;
     private List<EntryKey> searchResults = List.of();
@@ -93,6 +103,35 @@ public class AtlasScreen extends Screen {
             tabX += tabWidth + 2;
         }
 
+        // Filter chips below search box
+        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
+        int filterX = 6;
+        for (int i = 0; i < FILTER_LABELS.length; i++) {
+            String filterLabel = FILTER_LABELS[i];
+            int fw = font.width(filterLabel) + 12;
+            final int filterIdx = i;
+            Button filterBtn = Button.builder(Component.literal(filterLabel), btn -> {
+                activeFilter = filterIdx;
+                applyFilter();
+            }).bounds(filterX, filterY, fw, 14).build();
+            addRenderableWidget(filterBtn);
+            filterX += fw + 2;
+        }
+
+        // ? Help button (top-right corner)
+        Button helpBtn = Button.builder(Component.literal("?"), btn -> {
+            showHelp = !showHelp;
+        }).bounds(width - 22, 4, 18, 14).build();
+        addRenderableWidget(helpBtn);
+
+        // Bug report / Mod support button (bottom-right corner)
+        String reportLabel = "Report Bug / Request Mod";
+        int reportW = font.width(reportLabel) + 12;
+        Button reportBtn = Button.builder(Component.literal(reportLabel), btn -> {
+            Util.getPlatform().openUri(ISSUES_URL);
+        }).bounds(width - reportW - 4, height - 20, reportW, 16).build();
+        addRenderableWidget(reportBtn);
+
         // Calculate grid columns based on available width
         gridColumns = Math.max(1, (leftPanelWidth - 12) / ITEM_SIZE);
 
@@ -135,12 +174,17 @@ public class AtlasScreen extends Screen {
         // Draw recipe panel on the right
         drawRecipePanel(gfx, dividerX + 6, mouseX, mouseY);
 
+        // Help overlay (drawn on top of everything except widgets)
+        if (showHelp) {
+            drawHelpOverlay(gfx);
+        }
+
         // Let widgets (search box, buttons) render themselves
         super.extractRenderState(gfx, mouseX, mouseY, partialTick);
     }
 
     private void drawItemGrid(GuiGraphicsExtractor gfx, int mouseX, int mouseY) {
-        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 8;
+        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24; // below search + filter row
         int startX = 6;
         int maxRows = (height - startY - 4) / ITEM_SIZE;
         int visibleItems = gridColumns * maxRows;
@@ -390,6 +434,44 @@ public class AtlasScreen extends Screen {
         }
     }
 
+    // ── Filter + Help ──────────────────────────────────────────────────
+
+    private void applyFilter() {
+        String prefix = activeFilter > 0 ? FILTER_OPTIONS[activeFilter] + " " : "";
+        String current = searchBox.getValue().replaceAll("@\\S+\\s*", "").trim();
+        searchBox.setValue(prefix + current);
+    }
+
+    private void drawHelpOverlay(GuiGraphicsExtractor gfx) {
+        int ox = width / 4;
+        int oy = height / 4;
+        int ow = width / 2;
+        int oh = height / 2;
+        gfx.fill(ox, oy, ox + ow, oy + oh, 0xEE101018);
+        gfx.fill(ox, oy, ox + ow, oy + 1, DIVIDER_COLOR);
+        gfx.fill(ox, oy + oh - 1, ox + ow, oy + oh, DIVIDER_COLOR);
+        gfx.fill(ox, oy, ox + 1, oy + oh, DIVIDER_COLOR);
+        gfx.fill(ox + ow - 1, oy, ox + ow, oy + oh, DIVIDER_COLOR);
+
+        int x = ox + 8;
+        int y = oy + 8;
+        int lineH = 11;
+
+        gfx.text(font, Component.literal("Atlas Deep Mode"), x, y, HEADER_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Browse items on the left, click to select."), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Recipes and details appear on the right."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Tabs: Craft (how to make), Use (used in),"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Sources (all ways to obtain)."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Search prefixes:"), x, y, 0xFF8888FF); y += lineH;
+        gfx.text(font, Component.literal("  @mod    - show items from a specific mod"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  $tag    - filter by item tag"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  #text   - search in tooltip text"), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Use the filter buttons (All / Vanilla) to"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("quickly narrow down results."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Keybinds: U to open, Esc to close."), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Click ? again to close this help."), x, y, TEXT_COLOR);
+    }
+
     // ── Input handling ──────────────────────────────────────────────────
 
     @Override
@@ -398,7 +480,7 @@ public class AtlasScreen extends Screen {
         double mouseY = event.y();
 
         // Check if click is in the item grid
-        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 8;
+        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24;
         int startX = 6;
         int dividerX = panelDividerX();
 

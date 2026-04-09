@@ -54,7 +54,15 @@ public final class QuickModeOverlay {
     private static final int HEADER_HEIGHT = 16;
     private static final int SEARCH_HEIGHT = 16;
     private static final int MAX_SEARCH_CHARS = 64;
-    private static final int RECIPE_PREVIEW_HEIGHT = 68;
+
+    // Filter chips
+    private static final String[] FILTER_OPTIONS = {"All", "@minecraft"};
+    private static final String[] FILTER_LABELS  = {"All", "Vanilla"};
+    private static int activeFilter = 0;
+    private static final int FILTER_HEIGHT = 12;
+
+    // Help overlay
+    private static boolean showHelp = false;
 
     // Colors
     private static final int BG_COLOR = 0xCC101018;
@@ -149,8 +157,24 @@ public final class QuickModeOverlay {
             return false;
         }
 
-        // Any click inside the panel is consumed to prevent inventory interaction
-        // beneath the overlay. We still process search/grid hits below.
+        // Any click inside the panel is consumed to prevent inventory interaction.
+
+        // Help toggle: ? button in header
+        Font font = screen.getFont();
+        int panelX = panelX(screen);
+        int helpBtnX = panelX + PANEL_WIDTH - PADDING - font.width("?") - 4;
+        int helpBtnY = PADDING + 2;
+        if (mouseX >= helpBtnX - 1 && mouseX <= helpBtnX + font.width("?") + 3
+                && mouseY >= helpBtnY - 1 && mouseY <= helpBtnY + 10) {
+            showHelp = !showHelp;
+            return true;
+        }
+
+        // Close help on any other click
+        if (showHelp) {
+            showHelp = false;
+            return true;
+        }
 
         if (isPointInSearchBox(screen, mouseX, mouseY)) {
             searchFocused = true;
@@ -158,20 +182,33 @@ public final class QuickModeOverlay {
         }
         searchFocused = false;
 
-        int panelX = panelX(screen);
-        int startY = gridStartY();
-        int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
-
-        // Compute the bottom boundary of the item grid (exclude recipe preview area)
-        int panelBottom = screen.height - PADDING;
-        int gridBottom = panelBottom;
-        if (selectedEntry != null && !selectedRecipes.isEmpty()) {
-            gridBottom = panelBottom - RECIPE_PREVIEW_HEIGHT;
+        // Filter chips
+        int filterY = PADDING + HEADER_HEIGHT + SEARCH_HEIGHT + 1;
+        if (mouseY >= filterY && mouseY < filterY + FILTER_HEIGHT) {
+            int fx = panelX + PADDING;
+            for (int i = 0; i < FILTER_LABELS.length; i++) {
+                int tw = font.width(FILTER_LABELS[i]) + 6;
+                if (mouseX >= fx && mouseX < fx + tw) {
+                    activeFilter = i;
+                    // Apply filter by updating search text prefix
+                    applyFilter();
+                    return true;
+                }
+                fx += tw + 2;
+            }
         }
 
-        if (mouseY >= startY && mouseY < gridBottom) {
+        int gridTop = filterY + FILTER_HEIGHT + 2;
+        int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
+
+        // Dynamic grid bottom
+        int panelBottom = screen.height - PADDING;
+        int recipeH = computeRecipePreviewHeight(font);
+        int gridBottom = recipeH > 0 ? panelBottom - recipeH - 2 : panelBottom;
+
+        if (mouseY >= gridTop && mouseY < gridBottom) {
             int relX = (int) mouseX - panelX - PADDING;
-            int relY = (int) mouseY - startY;
+            int relY = (int) mouseY - gridTop;
             int col = relX / ITEM_SIZE;
             int row = relY / ITEM_SIZE;
             int idx = (row + scrollOffset) * columns + col;
@@ -185,6 +222,13 @@ public final class QuickModeOverlay {
         return true;
     }
 
+    private static void applyFilter() {
+        String filterPrefix = activeFilter > 0 ? FILTER_OPTIONS[activeFilter] + " " : "";
+        // Strip any existing @filter from searchText
+        String clean = searchText.replaceAll("@\\S+\\s*", "").trim();
+        setSearchText(filterPrefix + clean);
+    }
+
     /**
      * Handles key presses while quick mode is active.
      * Returns true if Atlas consumed the key.
@@ -194,10 +238,18 @@ public final class QuickModeOverlay {
 
         int key = event.key();
 
-        // Open search input with '/' for fast keyboard-driven filtering.
-        if (!searchFocused && key == GLFW.GLFW_KEY_SLASH) {
-            searchFocused = true;
-            return true;
+        // Open search on '/' — both US layout (GLFW_KEY_SLASH) and DE layout (Shift+7)
+        if (!searchFocused) {
+            if (showHelp && key == GLFW.GLFW_KEY_ESCAPE) {
+                showHelp = false;
+                return true;
+            }
+            boolean isSlash = key == GLFW.GLFW_KEY_SLASH
+                    || (key == GLFW.GLFW_KEY_7 && (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0);
+            if (isSlash) {
+                searchFocused = true;
+                return true;
+            }
         }
 
         if (!searchFocused) return false;
@@ -244,8 +296,12 @@ public final class QuickModeOverlay {
         gfx.fill(panelX, panelY, panelX + 1, panelBottom, BORDER_COLOR);
         gfx.fill(panelX + PANEL_WIDTH - 1, panelY, panelX + PANEL_WIDTH, panelBottom, BORDER_COLOR);
 
-        // Header
+        // Header + ? button
         gfx.text(font, Component.literal("Atlas Quick"), panelX + PADDING, panelY + 3, HEADER_COLOR);
+        int helpBtnX = panelX + PANEL_WIDTH - PADDING - font.width("?") - 4;
+        int helpBtnY = panelY + 2;
+        gfx.fill(helpBtnX - 1, helpBtnY - 1, helpBtnX + font.width("?") + 3, helpBtnY + 10, 0x66404060);
+        gfx.text(font, Component.literal("?"), helpBtnX + 1, helpBtnY, 0xFFAAAAFF);
 
         // Search field
         int searchY = panelY + HEADER_HEIGHT;
@@ -253,17 +309,30 @@ public final class QuickModeOverlay {
         int searchW = PANEL_WIDTH - PADDING * 2;
         int searchColor = searchFocused ? 0x663A5A8A : 0x55303030;
         gfx.fill(searchX, searchY, searchX + searchW, searchY + SEARCH_HEIGHT, searchColor);
-        String shownQuery = searchText.isEmpty() ? "Search (/)..." : searchText;
+        String shownQuery = searchText.isEmpty() ? "Search..." : searchText;
         int searchTextColor = searchText.isEmpty() ? 0xFF888888 : TEXT_COLOR;
         gfx.text(font, Component.literal(shownQuery), searchX + 3, searchY + 4, searchTextColor);
 
-        int gridTop = gridStartY();
+        // Filter chips row
+        int filterY = searchY + SEARCH_HEIGHT + 1;
+        int fx = panelX + PADDING;
+        for (int i = 0; i < FILTER_LABELS.length; i++) {
+            String lbl = FILTER_LABELS[i];
+            int tw = font.width(lbl) + 6;
+            int bgColor = (i == activeFilter) ? 0x883A5A8A : 0x44303030;
+            gfx.fill(fx, filterY, fx + tw, filterY + FILTER_HEIGHT, bgColor);
+            gfx.text(font, Component.literal(lbl), fx + 3, filterY + 2, i == activeFilter ? HEADER_COLOR : 0xFF888888);
+            fx += tw + 2;
+        }
+
+        int gridTop = filterY + FILTER_HEIGHT + 2;
         int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
 
-        // Reserve space at the bottom for recipe preview when an item is selected
+        // Compute dynamic recipe area height
+        int recipeH = computeRecipePreviewHeight(font);
         int recipeAreaTop = panelBottom - PADDING;
-        if (selectedEntry != null && !selectedRecipes.isEmpty()) {
-            recipeAreaTop = panelBottom - RECIPE_PREVIEW_HEIGHT;
+        if (recipeH > 0) {
+            recipeAreaTop = panelBottom - recipeH;
         }
 
         int gridBottom = recipeAreaTop - 2;
@@ -301,6 +370,28 @@ public final class QuickModeOverlay {
         if (selectedEntry != null && !selectedRecipes.isEmpty()) {
             drawRecipePreview(gfx, font, panelX + PADDING, recipeAreaTop, panelBottom - PADDING);
         }
+
+        // Help overlay (drawn last, on top)
+        if (showHelp) {
+            drawHelpOverlay(gfx, font, panelX, panelY, panelBottom);
+        }
+    }
+
+    private static int computeRecipePreviewHeight(Font font) {
+        if (selectedEntry == null || selectedRecipes.isEmpty()) return 0;
+        int h = 4; // divider + gap
+        int shown = 0;
+        for (RecipeNode recipe : selectedRecipes) {
+            if (shown >= 3) break;
+            h += 10; // label
+            if (recipe.categoryId().equals("minecraft:crafting")) {
+                h += 3 * GRID_SLOT + 3;
+            } else {
+                h += GRID_SLOT + 3;
+            }
+            shown++;
+        }
+        return h;
     }
 
     private static void drawRecipePreview(GuiGraphicsExtractor gfx, Font font, int x, int y, int bottomY) {
@@ -313,11 +404,11 @@ public final class QuickModeOverlay {
         gfx.fill(x - 2, y, x + PANEL_WIDTH - PADDING * 2, y + 1, BORDER_COLOR);
         y += 3;
 
-        // Show at most 2 recipes
+        // Show at most 3 recipes
         int shown = 0;
         for (RecipeNode recipe : selectedRecipes) {
             if (y + GRID_SLOT > bottomY) break;
-            if (shown >= 2) break;
+            if (shown >= 3) break;
 
             String label = categoryLabel(recipe.categoryId());
             var inputs = recipe.inputs();
@@ -479,8 +570,29 @@ public final class QuickModeOverlay {
         return screen.width - PANEL_WIDTH - PADDING;
     }
 
-    private static int gridStartY() {
-        return PADDING + HEADER_HEIGHT + SEARCH_HEIGHT + 2;
+    private static void drawHelpOverlay(GuiGraphicsExtractor gfx, Font font, int panelX, int panelY, int panelBottom) {
+        // Semi-transparent background over the whole panel
+        gfx.fill(panelX + 2, panelY + 2, panelX + PANEL_WIDTH - 2, panelBottom - 2, 0xEE101018);
+
+        int x = panelX + PADDING + 2;
+        int y = panelY + 6;
+        int lineH = 10;
+
+        gfx.text(font, Component.literal("Atlas Quick Mode"), x, y, HEADER_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Click an item to see"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("its recipes below."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Click the search bar"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("or press any key to"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("filter items by name."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Search prefixes:"), x, y, 0xFF8888FF); y += lineH;
+        gfx.text(font, Component.literal(" @mod  - filter by mod"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal(" $tag  - filter by tag"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal(" #text - search tooltip"), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Use the filter buttons"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("to switch All/Vanilla."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Scroll to browse items."), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Press O to toggle panel."), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Press Esc to close help."), x, y, TEXT_COLOR);
     }
 
     private static boolean isPointInPanel(Screen screen, double mouseX, double mouseY) {
@@ -506,13 +618,25 @@ public final class QuickModeOverlay {
             return shifted ? Character.toUpperCase(base) : base;
         }
 
+        // Number row: handle shifted chars for DE layout
         if (key >= GLFW.GLFW_KEY_0 && key <= GLFW.GLFW_KEY_9) {
+            if (shifted) {
+                // DE layout shifted number row: common chars
+                return switch (key) {
+                    case GLFW.GLFW_KEY_7 -> '/';
+                    case GLFW.GLFW_KEY_8 -> '(';
+                    case GLFW.GLFW_KEY_9 -> ')';
+                    case GLFW.GLFW_KEY_0 -> '=';
+                    default -> 0; // skip other shifted numbers
+                };
+            }
             return (char) ('0' + (key - GLFW.GLFW_KEY_0));
         }
 
+        if (key == GLFW.GLFW_KEY_SLASH) return '/';
         if (key == GLFW.GLFW_KEY_MINUS) return '-';
         if (key == GLFW.GLFW_KEY_PERIOD) return '.';
-        if (key == GLFW.GLFW_KEY_SEMICOLON) return ';';
+        if (key == GLFW.GLFW_KEY_SEMICOLON) return shifted ? ':' : ';';
         if (key == GLFW.GLFW_KEY_APOSTROPHE) return '\'';
         if (key == GLFW.GLFW_KEY_COMMA) return ',';
 
