@@ -189,7 +189,9 @@ public final class VanillaRecipeLoader {
 
     /**
      * Converts a SlotDisplay into IngredientKey entries.
-     * Handles item, itemstack, tag, and composite displays.
+     * Handles item, itemstack, tag, composite, and remainder displays.
+     * For composite (alternative) slots, picks the first resolvable child
+     * as the representative ingredient.
      */
     private static void addSlotAsIngredient(SlotDisplay slot, List<IngredientKey> out) {
         if (slot instanceof SlotDisplay.ItemSlotDisplay item) {
@@ -205,15 +207,18 @@ public final class VanillaRecipeLoader {
             out.add(IngredientKey.tag(tagKey.location().toString()));
 
         } else if (slot instanceof SlotDisplay.Composite composite) {
-            // Composite = alternatives. Take the first concrete one as representative.
-            // The full set of alternatives will be resolved by the Alternative Resolver.
-            // We call resolve to see nested displays, but for now just grab the first.
-            // Actually, Composite wraps a List<SlotDisplay>, let's try to access it.
-            // Since it's a record, it might have an accessor.
-            // Fall back: resolve for first stack
-            // For now, skip empty composites.
+            // Composite wraps alternatives (e.g. any plank type for a crafting slot).
+            // Recurse into the first child that yields a concrete ingredient.
+            List<SlotDisplay> children = composite.contents();
+            if (!children.isEmpty()) {
+                addSlotAsIngredient(children.getFirst(), out);
+            }
+
+        } else if (slot instanceof SlotDisplay.WithRemainder remainder) {
+            // WithRemainder wraps an inner slot plus a leftover (e.g. milk bucket -> bucket).
+            addSlotAsIngredient(remainder.input(), out);
         }
-        // SlotDisplay.Empty and unknown types are silently skipped
+        // SlotDisplay.Empty, AnyFuel, and unknown types are silently skipped
     }
 
     /**

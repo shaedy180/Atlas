@@ -2,6 +2,7 @@ package dev.atlasmod.fabric;
 
 import dev.atlasmod.api.AtlasApi;
 import dev.atlasmod.core.entry.EntryKey;
+import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.core.recipe.RecipeNode;
 import dev.atlasmod.search.SearchIndex;
@@ -15,6 +16,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
@@ -217,7 +219,7 @@ public class AtlasScreen extends Screen {
             // Inputs
             int inputX = x;
             for (var input : recipe.inputs()) {
-                ItemStack inputStack = ingredientToStack(input.id());
+                ItemStack inputStack = ingredientToStack(input);
                 if (!inputStack.isEmpty()) {
                     gfx.item(inputStack, inputX, y);
                     inputX += ITEM_SIZE;
@@ -364,8 +366,27 @@ public class AtlasScreen extends Screen {
         return idToStack(entry.id());
     }
 
-    private static ItemStack ingredientToStack(String id) {
-        return idToStack(id);
+    /**
+     * Resolves an IngredientKey to a representative ItemStack.
+     * For tag-based ingredients, picks the first item in the tag.
+     */
+    private static ItemStack ingredientToStack(IngredientKey ingredient) {
+        if (ingredient.tagBased()) {
+            return tagToStack(ingredient.id());
+        }
+        return idToStack(ingredient.id());
+    }
+
+    private static ItemStack tagToStack(String tagId) {
+        try {
+            Identifier loc = Identifier.parse(tagId);
+            TagKey<Item> tagKey = TagKey.create(BuiltInRegistries.ITEM.key(), loc);
+            for (var holder : BuiltInRegistries.ITEM.getTagOrEmpty(tagKey)) {
+                return new ItemStack(holder.value());
+            }
+        } catch (Exception ignored) {
+        }
+        return ItemStack.EMPTY;
     }
 
     private static ItemStack idToStack(String id) {

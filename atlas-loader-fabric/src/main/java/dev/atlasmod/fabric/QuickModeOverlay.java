@@ -2,6 +2,7 @@ package dev.atlasmod.fabric;
 
 import dev.atlasmod.api.AtlasApi;
 import dev.atlasmod.core.entry.EntryKey;
+import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.recipe.RecipeNode;
 import dev.atlasmod.search.SearchIndex;
 import dev.atlasmod.search.SearchQuery;
@@ -17,6 +18,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
@@ -145,9 +147,8 @@ public final class QuickModeOverlay {
             return false;
         }
 
-        int panelX = panelX(screen);
-        int startY = gridStartY();
-        int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
+        // Any click inside the panel is consumed to prevent inventory interaction
+        // beneath the overlay. We still process search/grid hits below.
 
         if (isPointInSearchBox(screen, mouseX, mouseY)) {
             searchFocused = true;
@@ -155,7 +156,11 @@ public final class QuickModeOverlay {
         }
         searchFocused = false;
 
-        if (mouseX >= panelX && mouseX <= screen.width && mouseY >= startY) {
+        int panelX = panelX(screen);
+        int startY = gridStartY();
+        int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
+
+        if (mouseY >= startY) {
             int relX = (int) mouseX - panelX - PADDING;
             int relY = (int) mouseY - startY;
             int col = relX / ITEM_SIZE;
@@ -166,10 +171,9 @@ public final class QuickModeOverlay {
                 selectedEntry = results.get(idx);
                 selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
                 LOGGER.info("[Atlas] Quick select: {} -> {} recipes", selectedEntry.id(), selectedRecipes.size());
-                return true;
             }
         }
-        return false;
+        return true;
     }
 
     /**
@@ -324,7 +328,7 @@ public final class QuickModeOverlay {
             int ix = x;
             for (var input : recipe.inputs()) {
                 if (ix + ITEM_SIZE > x + PANEL_WIDTH - PADDING * 2) break;
-                ItemStack inputStack = idToStack(input.id());
+                ItemStack inputStack = ingredientToStack(input);
                 if (!inputStack.isEmpty()) {
                     gfx.item(inputStack, ix, y);
                     ix += ITEM_SIZE;
@@ -349,6 +353,29 @@ public final class QuickModeOverlay {
     private static ItemStack entryToStack(EntryKey entry) {
         if (!"item".equals(entry.type())) return ItemStack.EMPTY;
         return idToStack(entry.id());
+    }
+
+    /**
+     * Resolves an IngredientKey to a representative ItemStack.
+     * For tag-based ingredients, picks the first item in the tag.
+     */
+    private static ItemStack ingredientToStack(IngredientKey ingredient) {
+        if (ingredient.tagBased()) {
+            return tagToStack(ingredient.id());
+        }
+        return idToStack(ingredient.id());
+    }
+
+    private static ItemStack tagToStack(String tagId) {
+        try {
+            Identifier loc = Identifier.parse(tagId);
+            TagKey<Item> tagKey = TagKey.create(BuiltInRegistries.ITEM.key(), loc);
+            for (var holder : BuiltInRegistries.ITEM.getTagOrEmpty(tagKey)) {
+                return new ItemStack(holder.value());
+            }
+        } catch (Exception ignored) {
+        }
+        return ItemStack.EMPTY;
     }
 
     private static ItemStack idToStack(String id) {
