@@ -33,7 +33,10 @@ Atlas goes beyond the typical recipe viewer. Instead of just showing you flat re
 
 ## Installation
 
-Requires Minecraft 26.1.1, Fabric Loader 0.18.4+, and Fabric API.
+Requires:
+- Minecraft 26.1+
+- Fabric Loader 0.18.4+
+- Fabric API 0.144+
 
 Drop the jar into your `mods` folder.
 
