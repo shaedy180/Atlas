@@ -20,7 +20,7 @@ public final class AtlasFabricClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("[Atlas] Initializing Atlas — Recipe & Item Intelligence Layer");
+        LOGGER.info("[Atlas] Initializing Atlas -- Recipe & Item Intelligence Layer");
 
         recipeGraph = new RecipeGraph();
         invalidationEngine = new InvalidationEngine();
@@ -32,6 +32,9 @@ public final class AtlasFabricClient implements ClientModInitializer {
 
         // Key bindings
         AtlasKeyBindings.register();
+
+        // Discover and invoke third-party Atlas plugins
+        AtlasPluginLoader.loadAll();
 
         LOGGER.info("[Atlas] Initialization complete. Graph ready for registration.");
     }
