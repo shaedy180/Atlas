@@ -39,3 +39,4 @@ local.properties
 
 # Atlas feature doc (local only)
 ATLAS.md
+.github/setup-labels.sh
