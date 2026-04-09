@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "atlas",
+  "version": "${version}",
+  "name": "Atlas",
+  "description": "Recipe & Item Intelligence Layer — an in-game Knowledge Graph for items, recipes, and acquisition paths.",
+  "authors": [
+    "shaedy180"
+  ],
+  "contact": {
+    "homepage": "https://github.com/shaedy180/Atlas",
+    "sources": "https://github.com/shaedy180/Atlas",
+    "issues": "https://github.com/shaedy180/Atlas/issues"
+  },
+  "license": "LGPL-3.0-or-later",
+  "icon": "assets/atlas/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.atlasmod.fabric.AtlasFabricClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "fabric-api": "*",
+    "minecraft": ">=26.1",
+    "java": ">=25"
+  },
+  "suggests": {},
+  "custom": {
+    "atlas": {
+      "plugin_entrypoint": "atlas"
+    }
+  }
+}

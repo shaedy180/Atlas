@@ -1,0 +1,41 @@
+# Compiled
+*.class
+*.jar
+*.war
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+out/
+bin/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Fabric
+run/
+logs/
+*.log
+
+# Misc
+local.properties
+*.bak
+*.swp
+*~
+
+# Atlas feature doc (local only)
+ATLAS.md
