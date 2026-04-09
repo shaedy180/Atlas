@@ -31,7 +31,12 @@ import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * Quick Mode: lightweight overlay panel drawn alongside inventory screens.
@@ -67,11 +72,20 @@ public final class QuickModeOverlay {
     private static boolean draggingResize = false;
     private static double dragStartX = 0;
 
-    // Filter chips
-    private static final String[] FILTER_OPTIONS = {"All", "@minecraft"};
-    private static final String[] FILTER_LABELS  = {"All", "Vanilla"};
+    // Filter chips (dynamic: rebuilt when recipes load)
+    private static List<String> filterOptions = new ArrayList<>(List.of("All", "@minecraft"));
+    private static List<String> filterLabels  = new ArrayList<>(List.of("All", "Vanilla"));
     private static int activeFilter = 0;
+    private static int filterScrollOffset = 0;
     private static final int FILTER_HEIGHT = 12;
+
+    // Actionbar feedback timer
+    private static String feedbackMessage = null;
+    private static long feedbackExpireTime = 0;
+
+    // Recipe item hit boxes for tooltip and click-through
+    private record ItemHitBox(int x, int y, int w, int h, EntryKey entry, ItemStack stack) {}
+    private static final List<ItemHitBox> recipeHitBoxes = new ArrayList<>();
 
     // Help overlay
     private static boolean showHelp = false;
@@ -89,13 +103,95 @@ public final class QuickModeOverlay {
         return enabled;
     }
 
+    // ── Panel width persistence ──────────────────────────────────────────
+
+    public static void savePrefs(Path file) {
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, "panelWidth=" + panelWidth + "\n");
+        } catch (IOException e) {
+            LOGGER.warn("[Atlas] Failed to save quick mode prefs", e);
+        }
+    }
+
+    public static void loadPrefs(Path file) {
+        try {
+            if (!Files.exists(file)) return;
+            for (String line : Files.readAllLines(file)) {
+                if (line.startsWith("panelWidth=")) {
+                    int w = Integer.parseInt(line.substring("panelWidth=".length()).trim());
+                    panelWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, w));
+                }
+            }
+            LOGGER.debug("[Atlas] Loaded quick mode prefs: panelWidth={}", panelWidth);
+        } catch (Exception e) {
+            LOGGER.warn("[Atlas] Failed to load quick mode prefs", e);
+        }
+    }
+
     public static void toggle() {
         enabled = !enabled;
         if (enabled) {
+            rebuildFilters();
             refreshSearch();
         } else {
             searchFocused = false;
         }
+    }
+
+    /**
+     * Rebuilds the dynamic filter list from detected mod namespaces.
+     */
+    public static void rebuildFilters() {
+        filterOptions = new ArrayList<>();
+        filterLabels = new ArrayList<>();
+        // Fixed entries
+        filterOptions.add("All");
+        filterLabels.add("All");
+        filterOptions.add("@minecraft");
+        filterLabels.add("Vanilla");
+        filterOptions.add("Saved");
+        filterLabels.add("Saved");
+        // Detect mod namespaces from recipe graph
+        var graph = AtlasFabricClient.recipeGraph();
+        if (graph != null) {
+            TreeSet<String> mods = new TreeSet<>();
+            for (var node : graph.allNodes()) {
+                String id = node.id();
+                int colon = id.indexOf(':');
+                if (colon > 0) {
+                    String ns = id.substring(0, colon);
+                    if (!"minecraft".equals(ns)) {
+                        mods.add(ns);
+                    }
+                }
+            }
+            for (String mod : mods) {
+                filterOptions.add("@" + mod);
+                // Capitalize mod name
+                filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
+            }
+        }
+        // Reset active filter if out of bounds
+        if (activeFilter >= filterLabels.size()) {
+            activeFilter = 0;
+        }
+    }
+
+    private static void showFeedback(String message) {
+        feedbackMessage = message;
+        feedbackExpireTime = System.currentTimeMillis() + 2000;
+        var mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.player.sendOverlayMessage(Component.literal(message));
+        }
+    }
+
+    private static EntryKey stackToEntry(ItemStack stack) {
+        if (stack.isEmpty()) return null;
+        var key = stack.typeHolder().unwrapKey().orElse(null);
+        if (key == null) return null;
+        return new EntryKey("item", key.identifier().toString());
     }
 
     /**
@@ -159,6 +255,18 @@ public final class QuickModeOverlay {
         if (!enabled) return false;
         int panelX = screen.width - panelWidth - PADDING;
         if (mouseX >= panelX && mouseX <= screen.width) {
+            // Horizontal scroll for filter chips row
+            int filterY = PADDING + HEADER_HEIGHT + SEARCH_HEIGHT + 1;
+            if (mouseY >= filterY && mouseY < filterY + FILTER_HEIGHT) {
+                Font font = screen.getFont();
+                int totalFilterWidth = 0;
+                for (int i = 0; i < filterLabels.size(); i++) {
+                    totalFilterWidth += font.width(filterLabels.get(i)) + 6 + 2;
+                }
+                int maxScroll = Math.max(0, totalFilterWidth - (panelWidth - PADDING * 2));
+                filterScrollOffset = Math.max(0, Math.min(maxScroll, filterScrollOffset + (int)(scrollY * -8)));
+                return true;
+            }
             scrollOffset = Math.max(0, scrollOffset - (int) scrollY);
             return true;
         }
@@ -214,12 +322,11 @@ public final class QuickModeOverlay {
         // Filter chips
         int filterY = PADDING + HEADER_HEIGHT + SEARCH_HEIGHT + 1;
         if (mouseY >= filterY && mouseY < filterY + FILTER_HEIGHT) {
-            int fx = panelX + PADDING;
-            for (int i = 0; i < FILTER_LABELS.length; i++) {
-                int tw = font.width(FILTER_LABELS[i]) + 6;
-                if (mouseX >= fx && mouseX < fx + tw) {
+            int fx = panelX + PADDING - filterScrollOffset;
+            for (int i = 0; i < filterLabels.size(); i++) {
+                int tw = font.width(filterLabels.get(i)) + 6;
+                if (mouseX >= Math.max(fx, panelX + PADDING) && mouseX < Math.min(fx + tw, panelX + panelWidth - PADDING)) {
                     activeFilter = i;
-                    // Apply filter by updating search text prefix
                     applyFilter();
                     return true;
                 }
@@ -235,10 +342,10 @@ public final class QuickModeOverlay {
         int recipeH = computeRecipePreviewHeight(font);
         int gridBottom = recipeH > 0 ? panelBottom - recipeH - 2 : panelBottom;
 
-        // Pin button: right side of recipe preview divider area
+        // Save button: right side of recipe preview divider area
         if (selectedEntry != null && recipeH > 0) {
             int pinY = panelBottom - recipeH;
-            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unpin" : "Pin";
+            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unsave" : "Save";
             int pinW = font.width(pinLabel) + 6;
             int pinX = panelX + panelWidth - PADDING - pinW;
             if (mouseX >= pinX && mouseX < pinX + pinW && mouseY >= pinY && mouseY < pinY + 12) {
@@ -258,6 +365,19 @@ public final class QuickModeOverlay {
                 int pasteX = pinX - pasteW - 2;
                 if (mouseX >= pasteX && mouseX < pasteX + pasteW && mouseY >= pinY && mouseY < pinY + 12) {
                     pasteRecipeIntoCraftingGrid(craftingScreen);
+                    return true;
+                }
+            }
+        }
+
+        // Recipe item click-through: clicking an ingredient/output navigates to its recipes
+        if (mouseY >= gridBottom) {
+            for (var hitBox : recipeHitBoxes) {
+                if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                        && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                    selectedEntry = hitBox.entry;
+                    selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                    LOGGER.info("[Atlas] Recipe click-through: {}", selectedEntry.id());
                     return true;
                 }
             }
@@ -284,10 +404,36 @@ public final class QuickModeOverlay {
     }
 
     private static void applyFilter() {
-        String filterPrefix = activeFilter > 0 ? FILTER_OPTIONS[activeFilter] + " " : "";
+        String filterValue = activeFilter > 0 ? filterOptions.get(activeFilter) : "";
+        // "Saved" filter: show only saved items regardless of search prefix
+        if ("Saved".equals(filterValue)) {
+            // Strip any existing @filter and refresh with saved items
+            String clean = searchText.replaceAll("@\\S+\\s*", "").trim();
+            searchText = clean;
+            refreshSearchWithSavedFilter();
+            return;
+        }
+        String filterPrefix = activeFilter > 0 ? filterValue + " " : "";
         // Strip any existing @filter from searchText
         String clean = searchText.replaceAll("@\\S+\\s*", "").trim();
         setSearchText(filterPrefix + clean);
+    }
+
+    private static void refreshSearchWithSavedFilter() {
+        SearchIndex index = AtlasFabricClient.searchIndex();
+        if (index == null) {
+            results = List.of();
+            return;
+        }
+        PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
+        var savedTargets = new java.util.HashSet<EntryKey>();
+        for (var plan : pm.plans()) {
+            savedTargets.add(plan.target());
+        }
+        SearchQuery query = SearchQuery.parse(searchText);
+        var allResults = index.search(query);
+        results = allResults.stream().filter(savedTargets::contains).toList();
+        scrollOffset = 0;
     }
 
     /**
@@ -385,16 +531,31 @@ public final class QuickModeOverlay {
         int searchTextColor = searchText.isEmpty() ? 0xFF888888 : TEXT_COLOR;
         gfx.text(font, Component.literal(shownQuery), searchX + 3, searchY + 4, searchTextColor);
 
-        // Filter chips row
+        // Filter chips row (scrollable)
         int filterY = searchY + SEARCH_HEIGHT + 1;
-        int fx = panelX + PADDING;
-        for (int i = 0; i < FILTER_LABELS.length; i++) {
-            String lbl = FILTER_LABELS[i];
+        int filterAreaLeft = panelX + PADDING;
+        int filterAreaRight = panelX + panelWidth - PADDING;
+        gfx.enableScissor(filterAreaLeft, filterY, filterAreaRight, filterY + FILTER_HEIGHT);
+        int fx = filterAreaLeft - filterScrollOffset;
+        int totalFilterWidth = 0;
+        for (int i = 0; i < filterLabels.size(); i++) {
+            String lbl = filterLabels.get(i);
             int tw = font.width(lbl) + 6;
             int bgColor = (i == activeFilter) ? 0x883A5A8A : 0x44303030;
             gfx.fill(fx, filterY, fx + tw, filterY + FILTER_HEIGHT, bgColor);
             gfx.text(font, Component.literal(lbl), fx + 3, filterY + 2, i == activeFilter ? HEADER_COLOR : 0xFF888888);
             fx += tw + 2;
+            totalFilterWidth += tw + 2;
+        }
+        gfx.disableScissor();
+
+        // Scroll indicators for filter row
+        if (filterScrollOffset > 0) {
+            gfx.text(font, Component.literal("\u25C0"), filterAreaLeft - 1, filterY + 1, 0xFF888888);
+        }
+        int maxFilterScroll = Math.max(0, totalFilterWidth - (filterAreaRight - filterAreaLeft));
+        if (filterScrollOffset < maxFilterScroll) {
+            gfx.text(font, Component.literal("\u25B6"), filterAreaRight - 6, filterY + 1, 0xFF888888);
         }
 
         int gridTop = filterY + FILTER_HEIGHT + 2;
@@ -443,13 +604,20 @@ public final class QuickModeOverlay {
 
         gfx.disableScissor();
 
+        // Feedback text (timed overlay)
+        if (feedbackMessage != null && System.currentTimeMillis() < feedbackExpireTime) {
+            gfx.text(font, Component.literal(feedbackMessage), panelX + PADDING, panelBottom - 10, 0xFF88FF88);
+        } else {
+            feedbackMessage = null;
+        }
+
         // Recipe preview at the bottom
         if (selectedEntry != null && !selectedRecipes.isEmpty()) {
-            drawRecipePreview(gfx, font, panelX + PADDING, recipeAreaTop, panelBottom - PADDING);
+            drawRecipePreview(gfx, font, panelX + PADDING, recipeAreaTop, panelBottom - PADDING, mouseX, mouseY);
 
-            // Pin button at the recipe divider line
+            // Save button at the recipe divider line
             boolean pinned = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry);
-            String pinLabel = pinned ? "Unpin" : "Pin";
+            String pinLabel = pinned ? "Unsave" : "Save";
             int pinW = font.width(pinLabel) + 6;
             int pinX = panelX + panelWidth - PADDING - pinW;
             int pinY = recipeAreaTop;
@@ -491,7 +659,8 @@ public final class QuickModeOverlay {
         return h;
     }
 
-    private static void drawRecipePreview(GuiGraphicsExtractor gfx, Font font, int x, int y, int bottomY) {
+    private static void drawRecipePreview(GuiGraphicsExtractor gfx, Font font, int x, int y, int bottomY, int mouseX, int mouseY) {
+        recipeHitBoxes.clear();
         if (selectedRecipes.isEmpty()) {
             gfx.text(font, Component.literal("No recipes"), x, y, TEXT_COLOR);
             return;
@@ -533,6 +702,10 @@ public final class QuickModeOverlay {
                             ItemStack inputStack = ingredientToStack(ingredient);
                             if (!inputStack.isEmpty()) {
                                 gfx.item(inputStack, sx, sy);
+                                EntryKey entry = stackToEntry(inputStack);
+                                if (entry != null) {
+                                    recipeHitBoxes.add(new ItemHitBox(sx, sy, GRID_SLOT, GRID_SLOT, entry, inputStack));
+                                }
                             }
                         }
                     }
@@ -549,6 +722,10 @@ public final class QuickModeOverlay {
                     ItemStack outputStack = entryToStack(output);
                     if (!outputStack.isEmpty()) {
                         gfx.item(outputStack, outX, outY);
+                        EntryKey entry = stackToEntry(outputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(outX, outY, GRID_SLOT, GRID_SLOT, entry, outputStack));
+                        }
                         outX += GRID_SLOT;
                     }
                 }
@@ -562,6 +739,10 @@ public final class QuickModeOverlay {
                     ItemStack inputStack = ingredientToStack(input);
                     if (!inputStack.isEmpty()) {
                         gfx.item(inputStack, ix, y);
+                        EntryKey entry = stackToEntry(inputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(ix, y, GRID_SLOT, GRID_SLOT, entry, inputStack));
+                        }
                         ix += GRID_SLOT;
                     }
                 }
@@ -571,12 +752,25 @@ public final class QuickModeOverlay {
                     ItemStack outputStack = entryToStack(output);
                     if (!outputStack.isEmpty()) {
                         gfx.item(outputStack, ix, y);
+                        EntryKey entry = stackToEntry(outputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(ix, y, GRID_SLOT, GRID_SLOT, entry, outputStack));
+                        }
                         ix += GRID_SLOT;
                     }
                 }
                 y += GRID_SLOT + 3;
             }
             shown++;
+        }
+
+        // Tooltip for recipe items on hover
+        for (var hitBox : recipeHitBoxes) {
+            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
+                break;
+            }
         }
     }
 
@@ -632,9 +826,20 @@ public final class QuickModeOverlay {
         stack = stack.copy();
         stack.setCount(shifted ? stack.getMaxStackSize() : 1);
 
-        // Add to first available inventory slot via creative mode packet
-        mc.gameMode.handleCreativeModeItemAdd(stack, 36 + mc.player.getInventory().getSelectedSlot());
-        LOGGER.info("[Atlas] Creative give: {} x{}", entry.id(), stack.getCount());
+        // Find next free inventory slot instead of overwriting hotbar
+        int freeSlot = mc.player.getInventory().getFreeSlot();
+        if (freeSlot == -1) {
+            showFeedback("\u00A7c Inventory full!");
+            return;
+        }
+        // Set locally first so the item appears immediately in the player's inventory,
+        // then sync to server via creative packet (server sync-back may be delayed/lost
+        // when a different container is open)
+        mc.player.getInventory().setItem(freeSlot, stack.copy());
+        int containerSlot = freeSlot < 9 ? freeSlot + 36 : freeSlot;
+        mc.gameMode.handleCreativeModeItemAdd(stack, containerSlot);
+        showFeedback("\u00A7a\u2714 " + stack.getHoverName().getString() + " x" + stack.getCount());
+        LOGGER.info("[Atlas] Creative give: {} x{} -> slot {}", entry.id(), stack.getCount(), freeSlot);
     }
 
     // ── Recipe Paste ────────────────────────────────────────────────────
@@ -660,19 +865,23 @@ public final class QuickModeOverlay {
         int gw = recipe.gridWidth();
         int gh = recipe.gridHeight();
 
+        int needed = 0;
+        int filled = 0;
         for (int gridIdx = 0; gridIdx < 9; gridIdx++) {
             int row = gridIdx / 3;
             int col = gridIdx % 3;
             IngredientKey ingredient = getGridIngredient(recipe.inputs(), gw, gh, row, col);
             if (ingredient == null || ingredient.isEmpty()) continue;
             if (gridIdx >= gridSlots.size()) break;
+            needed++;
 
             Slot gridSlot = gridSlots.get(gridIdx);
-            if (!gridSlot.getItem().isEmpty()) continue; // slot already occupied
+            if (!gridSlot.getItem().isEmpty()) { filled++; continue; } // slot already occupied
 
             // Find a matching item in the player's inventory portion of the container
             // Crafting grid slots are first (0 = result, 1-9 = grid), then player inventory
             int invStart = 10; // first player inventory slot in the container
+            boolean found = false;
             for (int invIdx = invStart; invIdx < menu.slots.size(); invIdx++) {
                 Slot sourceSlot = menu.getSlot(invIdx);
                 if (sourceSlot.getItem().isEmpty()) continue;
@@ -684,11 +893,18 @@ public final class QuickModeOverlay {
                     mc.gameMode.handleContainerInput(containerId, gridContainerIdx, 1, ContainerInput.PICKUP, mc.player);
                     // Put remaining stack back
                     mc.gameMode.handleContainerInput(containerId, invIdx, 0, ContainerInput.PICKUP, mc.player);
+                    found = true;
                     break;
                 }
             }
+            if (found) filled++;
         }
-        LOGGER.info("[Atlas] Pasted recipe: {}", recipe.id());
+
+        if (filled < needed) {
+            int missing = needed - filled;
+            showFeedback("\u00A7e Missing " + missing + " material" + (missing > 1 ? "s" : "") + "!");
+        }
+        LOGGER.info("[Atlas] Pasted recipe: {} ({}/{})", recipe.id(), filled, needed);
     }
 
     private static boolean matchesIngredient(ItemStack stack, IngredientKey ingredient) {
@@ -777,7 +993,7 @@ public final class QuickModeOverlay {
         gfx.text(font, Component.literal(" $tag  - filter by tag"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal(" #text - search tooltip"), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Use the filter buttons"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("to switch All/Vanilla."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("to filter by mod/saved."), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Scroll to browse items."), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("Press O to toggle panel."), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("Press Esc to close help."), x, y, TEXT_COLOR);

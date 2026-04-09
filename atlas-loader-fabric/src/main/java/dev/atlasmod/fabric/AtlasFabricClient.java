@@ -31,6 +31,7 @@ public final class AtlasFabricClient implements ClientModInitializer {
     private static PinnedPlanManager pinnedPlanManager;
 
     private static final String PINS_FILE = "atlas_pins.txt";
+    private static final String PREFS_FILE = "atlas_prefs.txt";
 
     // Guard: load recipes once per world join (reset on disconnect)
     private static boolean recipesLoaded = false;
@@ -74,6 +75,8 @@ public final class AtlasFabricClient implements ClientModInitializer {
             } catch (Exception e) {
                 LOGGER.warn("[Atlas] Failed to load pinned plans", e);
             }
+            // Load quick mode preferences
+            QuickModeOverlay.loadPrefs(prefsPath());
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
@@ -84,6 +87,8 @@ public final class AtlasFabricClient implements ClientModInitializer {
             } catch (Exception e) {
                 LOGGER.warn("[Atlas] Failed to save pinned plans", e);
             }
+            // Save quick mode preferences
+            QuickModeOverlay.savePrefs(prefsPath());
             recipesLoaded = false;
             recipeGraph.clear();
             searchIndex.clear();
@@ -125,5 +130,9 @@ public final class AtlasFabricClient implements ClientModInitializer {
 
     private static Path pinsPath() {
         return Minecraft.getInstance().gameDirectory.toPath().resolve(PINS_FILE);
+    }
+
+    private static Path prefsPath() {
+        return Minecraft.getInstance().gameDirectory.toPath().resolve(PREFS_FILE);
     }
 }

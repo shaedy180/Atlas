@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * Deep Mode: fullscreen Atlas screen with search, item grid, and recipe panel.
@@ -56,10 +57,12 @@ public class AtlasScreen extends Screen {
 
     private static final String ISSUES_URL = "https://github.com/shaedy180/Atlas/issues";
 
-    // Filter chips
-    private static final String[] FILTER_OPTIONS = {"", "@minecraft"};
-    private static final String[] FILTER_LABELS  = {"All", "Vanilla"};
+    // Filter chips (dynamic: rebuilt on init)
+    private List<String> filterOptions = new ArrayList<>(List.of("", "@minecraft"));
+    private List<String> filterLabels  = new ArrayList<>(List.of("All", "Vanilla"));
     private int activeFilter = 0;
+    private int filterScrollOffset = 0;
+    private int totalFilterWidth = 0;
 
     private boolean showHelp = false;
 
@@ -73,6 +76,14 @@ public class AtlasScreen extends Screen {
     private List<RecipeNode> selectedRecipes = List.of();
     private DeepModeTab activeTab = DeepModeTab.CRAFT;
 
+    // Recipe item hit boxes for tooltip and click-through
+    private record ItemHitBox(int x, int y, int w, int h, EntryKey entry, ItemStack stack) {}
+    private final List<ItemHitBox> recipeHitBoxes = new ArrayList<>();
+
+    // In-UI feedback (visible even when full-screen)
+    private String feedbackText = null;
+    private long feedbackExpireTime = 0;
+
     public AtlasScreen() {
         super(Component.translatable("screen.atlas.title"));
     }
@@ -81,6 +92,9 @@ public class AtlasScreen extends Screen {
     protected void init() {
         super.init();
         LOGGER.info("[Atlas] Deep Mode init: {}x{}", width, height);
+
+        // Rebuild dynamic filters
+        rebuildFilters();
 
         int leftPanelWidth = panelDividerX();
 
@@ -106,19 +120,11 @@ public class AtlasScreen extends Screen {
             tabX += tabWidth + 2;
         }
 
-        // Filter chips below search box
-        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
-        int filterX = 6;
-        for (int i = 0; i < FILTER_LABELS.length; i++) {
-            String filterLabel = FILTER_LABELS[i];
-            int fw = font.width(filterLabel) + 12;
-            final int filterIdx = i;
-            Button filterBtn = Button.builder(Component.literal(filterLabel), btn -> {
-                activeFilter = filterIdx;
-                applyFilter();
-            }).bounds(filterX, filterY, fw, 14).build();
-            addRenderableWidget(filterBtn);
-            filterX += fw + 2;
+        // Calculate total filter width for manual rendering (filters are drawn manually with scissor clipping)
+        totalFilterWidth = 0;
+        for (int i = 0; i < filterLabels.size(); i++) {
+            int fw = font.width(filterLabels.get(i)) + 12;
+            totalFilterWidth += fw + 2;
         }
 
         // ? Help button (top-right corner)
@@ -146,14 +152,70 @@ public class AtlasScreen extends Screen {
         return width * PANEL_DIVIDER_X_RATIO / 100;
     }
 
+    private void rebuildFilters() {
+        filterOptions = new ArrayList<>();
+        filterLabels = new ArrayList<>();
+        filterOptions.add("");
+        filterLabels.add("All");
+        filterOptions.add("@minecraft");
+        filterLabels.add("Vanilla");
+        filterOptions.add("Saved");
+        filterLabels.add("Saved");
+        var graph = AtlasFabricClient.recipeGraph();
+        if (graph != null) {
+            TreeSet<String> mods = new TreeSet<>();
+            for (var node : graph.allNodes()) {
+                String id = node.id();
+                int colon = id.indexOf(':');
+                if (colon > 0) {
+                    String ns = id.substring(0, colon);
+                    if (!"minecraft".equals(ns)) {
+                        mods.add(ns);
+                    }
+                }
+            }
+            for (String mod : mods) {
+                filterOptions.add("@" + mod);
+                filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
+            }
+        }
+        if (activeFilter >= filterLabels.size()) {
+            activeFilter = 0;
+        }
+    }
+
+    private void showFeedback(String message) {
+        feedbackText = message;
+        feedbackExpireTime = System.currentTimeMillis() + 2000;
+    }
+
+    private static EntryKey stackToEntry(ItemStack stack) {
+        if (stack.isEmpty()) return null;
+        var key = stack.typeHolder().unwrapKey().orElse(null);
+        if (key == null) return null;
+        return new EntryKey("item", key.identifier().toString());
+    }
+
     private void onSearchChanged(String text) {
         SearchIndex index = AtlasFabricClient.searchIndex();
         if (index == null) {
             searchResults = List.of();
             return;
         }
-        SearchQuery query = SearchQuery.parse(text);
-        searchResults = index.search(query);
+        // If "Saved" filter is active, filter to saved items only
+        if (activeFilter >= 0 && activeFilter < filterOptions.size() && "Saved".equals(filterOptions.get(activeFilter))) {
+            PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
+            var savedTargets = new java.util.HashSet<EntryKey>();
+            for (var plan : pm.plans()) {
+                savedTargets.add(plan.target());
+            }
+            SearchQuery query = SearchQuery.parse(text);
+            var allResults = index.search(query);
+            searchResults = allResults.stream().filter(savedTargets::contains).toList();
+        } else {
+            SearchQuery query = SearchQuery.parse(text);
+            searchResults = index.search(query);
+        }
         scrollOffset = 0;
     }
 
@@ -177,6 +239,17 @@ public class AtlasScreen extends Screen {
         // Draw recipe panel on the right
         drawRecipePanel(gfx, dividerX + 6, mouseX, mouseY);
 
+        // Feedback toast (visible in-UI)
+        if (feedbackText != null && System.currentTimeMillis() < feedbackExpireTime) {
+            int fbW = font.width(feedbackText) + 12;
+            int fbX = (width - fbW) / 2;
+            int fbY = height - 24;
+            gfx.fill(fbX, fbY, fbX + fbW, fbY + 14, 0xCC222222);
+            gfx.text(font, Component.literal(feedbackText), fbX + 6, fbY + 3, 0xFF88FF88);
+        } else {
+            feedbackText = null;
+        }
+
         // Help overlay (drawn on top of everything except widgets)
         if (showHelp) {
             drawHelpOverlay(gfx);
@@ -184,6 +257,31 @@ public class AtlasScreen extends Screen {
 
         // Let widgets (search box, buttons) render themselves
         super.extractRenderState(gfx, mouseX, mouseY, partialTick);
+
+        // Filter chips (rendered manually with scissor clipping)
+        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
+        int filterAreaLeft = 6;
+        int filterAreaRight = dividerX - 6;
+        gfx.enableScissor(filterAreaLeft, filterY, filterAreaRight, filterY + 14);
+        int fx = filterAreaLeft - filterScrollOffset;
+        for (int i = 0; i < filterLabels.size(); i++) {
+            String lbl = filterLabels.get(i);
+            int fw = font.width(lbl) + 12;
+            int bgColor = (i == activeFilter) ? 0x883A5A8A : 0x44303030;
+            gfx.fill(fx, filterY, fx + fw, filterY + 14, bgColor);
+            gfx.centeredText(font, Component.literal(lbl), fx + fw / 2, filterY + 3, i == activeFilter ? HEADER_COLOR : 0xFFCCCCCC);
+            fx += fw + 2;
+        }
+        gfx.disableScissor();
+
+        // Scroll indicators for filter row
+        if (filterScrollOffset > 0) {
+            gfx.text(font, Component.literal("\u25C0"), filterAreaLeft - 1, filterY + 3, 0xFF888888);
+        }
+        int maxFilterScroll = Math.max(0, totalFilterWidth - (filterAreaRight - filterAreaLeft));
+        if (filterScrollOffset < maxFilterScroll) {
+            gfx.text(font, Component.literal("\u25B6"), filterAreaRight - 5, filterY + 3, 0xFF888888);
+        }
     }
 
     private void drawItemGrid(GuiGraphicsExtractor gfx, int mouseX, int mouseY) {
@@ -232,6 +330,7 @@ public class AtlasScreen extends Screen {
     }
 
     private void drawRecipePanel(GuiGraphicsExtractor gfx, int startX, int mouseX, int mouseY) {
+        recipeHitBoxes.clear();
         int startY = HEADER_HEIGHT + TAB_HEIGHT + 8;
 
         if (selectedEntry == null) {
@@ -246,10 +345,10 @@ public class AtlasScreen extends Screen {
             gfx.text(font, stack.getHoverName(), startX + 20, startY + 4, HEADER_COLOR);
         }
 
-        // Pin button next to item name
+        // Save button next to item name
         PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
         boolean pinned = pm.isPinned(selectedEntry);
-        String pinLabel = pinned ? "Unpin" : "Pin";
+        String pinLabel = pinned ? "Unsave" : "Save";
         int pinW = font.width(pinLabel) + 8;
         int pinX = width - pinW - 8;
         int pinY = startY + 2;
@@ -262,8 +361,8 @@ public class AtlasScreen extends Screen {
 
         // Tab-specific content
         switch (activeTab) {
-            case CRAFT -> drawCraftTab(gfx, startX, startY);
-            case USE -> drawUseTab(gfx, startX, startY);
+            case CRAFT -> drawCraftTab(gfx, startX, startY, mouseX, mouseY);
+            case USE -> drawUseTab(gfx, startX, startY, mouseX, mouseY);
             case SOURCES -> drawSourcesTab(gfx, startX, startY);
             default -> gfx.text(font, Component.literal(activeTab.name() + " - Coming soon"),
                     startX, startY, TEXT_COLOR);
@@ -272,7 +371,7 @@ public class AtlasScreen extends Screen {
 
     private static final int GRID_SLOT = 18;
 
-    private void drawCraftTab(GuiGraphicsExtractor gfx, int x, int y) {
+    private void drawCraftTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
         if (selectedRecipes.isEmpty()) {
             gfx.text(font, Component.literal("No recipes found"), x, y, TEXT_COLOR);
             return;
@@ -307,6 +406,10 @@ public class AtlasScreen extends Screen {
                             ItemStack inputStack = ingredientToStack(ingredient);
                             if (!inputStack.isEmpty()) {
                                 gfx.item(inputStack, sx, sy);
+                                EntryKey entry = stackToEntry(inputStack);
+                                if (entry != null) {
+                                    recipeHitBoxes.add(new ItemHitBox(sx, sy, GRID_SLOT, GRID_SLOT, entry, inputStack));
+                                }
                             }
                         }
                     }
@@ -323,6 +426,10 @@ public class AtlasScreen extends Screen {
                     ItemStack outputStack = entryToStack(output);
                     if (!outputStack.isEmpty()) {
                         gfx.item(outputStack, outX, outY);
+                        EntryKey entry = stackToEntry(outputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(outX, outY, GRID_SLOT, GRID_SLOT, entry, outputStack));
+                        }
                         outX += GRID_SLOT;
                     }
                 }
@@ -335,6 +442,10 @@ public class AtlasScreen extends Screen {
                     ItemStack inputStack = ingredientToStack(input);
                     if (!inputStack.isEmpty()) {
                         gfx.item(inputStack, inputX, y);
+                        EntryKey entry = stackToEntry(inputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(inputX, y, GRID_SLOT, GRID_SLOT, entry, inputStack));
+                        }
                         inputX += GRID_SLOT;
                     }
                 }
@@ -344,6 +455,10 @@ public class AtlasScreen extends Screen {
                     ItemStack outputStack = entryToStack(output);
                     if (!outputStack.isEmpty()) {
                         gfx.item(outputStack, inputX, y);
+                        EntryKey entry = stackToEntry(outputStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(inputX, y, GRID_SLOT, GRID_SLOT, entry, outputStack));
+                        }
                         inputX += GRID_SLOT;
                     }
                 }
@@ -358,6 +473,15 @@ public class AtlasScreen extends Screen {
             }
 
             y += 4;
+        }
+
+        // Tooltip for recipe items on hover
+        for (var hitBox : recipeHitBoxes) {
+            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
+                break;
+            }
         }
     }
 
@@ -394,7 +518,7 @@ public class AtlasScreen extends Screen {
         };
     }
 
-    private void drawUseTab(GuiGraphicsExtractor gfx, int x, int y) {
+    private void drawUseTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
         if (selectedEntry == null) return;
 
         // Find recipes that use this item as an input
@@ -430,10 +554,23 @@ public class AtlasScreen extends Screen {
                 ItemStack outStack = entryToStack(output);
                 if (!outStack.isEmpty()) {
                     gfx.item(outStack, outX, y);
+                    EntryKey entry = stackToEntry(outStack);
+                    if (entry != null) {
+                        recipeHitBoxes.add(new ItemHitBox(outX, y, ITEM_SIZE, ITEM_SIZE, entry, outStack));
+                    }
                     outX += ITEM_SIZE;
                 }
             }
             y += ITEM_SIZE + 4;
+        }
+
+        // Tooltip for recipe items on hover
+        for (var hitBox : recipeHitBoxes) {
+            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
+                break;
+            }
         }
     }
 
@@ -458,7 +595,13 @@ public class AtlasScreen extends Screen {
     // ── Filter + Help ──────────────────────────────────────────────────
 
     private void applyFilter() {
-        String prefix = activeFilter > 0 ? FILTER_OPTIONS[activeFilter] + " " : "";
+        String filterValue = activeFilter > 0 ? filterOptions.get(activeFilter) : "";
+        if ("Saved".equals(filterValue)) {
+            String current = searchBox.getValue().replaceAll("@\\S+\\s*", "").trim();
+            searchBox.setValue(current);
+            return;
+        }
+        String prefix = activeFilter > 0 ? filterValue + " " : "";
         String current = searchBox.getValue().replaceAll("@\\S+\\s*", "").trim();
         searchBox.setValue(prefix + current);
     }
@@ -487,8 +630,8 @@ public class AtlasScreen extends Screen {
         gfx.text(font, Component.literal("  @mod    - show items from a specific mod"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("  $tag    - filter by item tag"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("  #text   - search in tooltip text"), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Use the filter buttons (All / Vanilla) to"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("quickly narrow down results."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Use the filter buttons (All / Vanilla / Saved)"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("to narrow results. Mod filters auto-detected."), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Keybinds: U to open, Esc to close."), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("Click ? again to close this help."), x, y, TEXT_COLOR);
     }
@@ -500,10 +643,10 @@ public class AtlasScreen extends Screen {
         double mouseX = event.x();
         double mouseY = event.y();
 
-        // Pin button click detection (right side of recipe panel header)
+        // Save button click detection (right side of recipe panel header)
         if (selectedEntry != null) {
             int pinHeaderY = HEADER_HEIGHT + TAB_HEIGHT + 8 + 2;
-            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unpin" : "Pin";
+            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unsave" : "Save";
             int pinW = font.width(pinLabel) + 8;
             int pinX = width - pinW - 8;
             if (mouseX >= pinX && mouseX < pinX + pinW && mouseY >= pinHeaderY && mouseY < pinHeaderY + 14) {
@@ -517,10 +660,40 @@ public class AtlasScreen extends Screen {
             }
         }
 
+        // Recipe item click-through: clicking an ingredient/output navigates to its recipes
+        int dividerX = panelDividerX();
+        if (mouseX > dividerX) {
+            for (var hitBox : recipeHitBoxes) {
+                if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                        && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                    selectedEntry = hitBox.entry;
+                    selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                    LOGGER.info("[Atlas] Recipe click-through: {}", selectedEntry.id());
+                    return true;
+                }
+            }
+        }
+
+        // Filter chip click handling (manual, matching scissor-rendered chips)
+        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
+        int filterAreaLeft = 6;
+        int filterAreaRight = panelDividerX() - 6;
+        if (mouseY >= filterY && mouseY < filterY + 14 && mouseX >= filterAreaLeft && mouseX < filterAreaRight) {
+            int fx = filterAreaLeft - filterScrollOffset;
+            for (int i = 0; i < filterLabels.size(); i++) {
+                int fw = font.width(filterLabels.get(i)) + 12;
+                if (mouseX >= Math.max(filterAreaLeft, fx) && mouseX < Math.min(filterAreaRight, fx + fw)) {
+                    activeFilter = i;
+                    applyFilter();
+                    return true;
+                }
+                fx += fw + 2;
+            }
+        }
+
         // Check if click is in the item grid
         int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24;
         int startX = 6;
-        int dividerX = panelDividerX();
 
         if (mouseX >= startX && mouseX < dividerX && mouseY >= startY && mouseY < height) {
             int col = (int) (mouseX - startX) / ITEM_SIZE;
@@ -543,6 +716,13 @@ public class AtlasScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        // Horizontal scroll for filter row
+        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
+        if (mouseX < panelDividerX() && mouseY >= filterY && mouseY < filterY + 18) {
+            int maxScroll = Math.max(0, totalFilterWidth - panelDividerX() + 12);
+            filterScrollOffset = Math.max(0, Math.min(maxScroll, filterScrollOffset + (int)(scrollY * -8)));
+            return true;
+        }
         // Scroll item grid in the left panel
         if (mouseX < panelDividerX()) {
             scrollOffset = Math.max(0, scrollOffset - (int) scrollY);
@@ -574,8 +754,18 @@ public class AtlasScreen extends Screen {
         stack = stack.copy();
         stack.setCount(shifted ? stack.getMaxStackSize() : 1);
 
-        mc.gameMode.handleCreativeModeItemAdd(stack, 36 + mc.player.getInventory().getSelectedSlot());
-        LOGGER.info("[Atlas] Creative give: {} x{}", entry.id(), stack.getCount());
+        // Find next free inventory slot instead of overwriting hotbar
+        int freeSlot = mc.player.getInventory().getFreeSlot();
+        if (freeSlot == -1) {
+            showFeedback("\u00A7c Inventory full!");
+            return;
+        }
+        // Set locally first so the item appears immediately, then sync to server
+        mc.player.getInventory().setItem(freeSlot, stack.copy());
+        int containerSlot = freeSlot < 9 ? freeSlot + 36 : freeSlot;
+        mc.gameMode.handleCreativeModeItemAdd(stack, containerSlot);
+        showFeedback("\u00A7a\u2714 " + stack.getHoverName().getString() + " x" + stack.getCount());
+        LOGGER.info("[Atlas] Creative give: {} x{} -> slot {}", entry.id(), stack.getCount(), freeSlot);
     }
 
     // ── Utility: convert entry/ingredient IDs to ItemStack ──────────────
