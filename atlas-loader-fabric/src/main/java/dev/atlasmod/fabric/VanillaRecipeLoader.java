@@ -172,8 +172,13 @@ public final class VanillaRecipeLoader {
         List<IngredientKey> inputs = new ArrayList<>();
 
         if (display instanceof ShapedCraftingRecipeDisplay shaped) {
+            // Preserve empty slots so grid positions stay correct
             for (SlotDisplay slot : shaped.ingredients()) {
-                addSlotAsIngredient(slot, inputs);
+                if (slot instanceof SlotDisplay.Empty) {
+                    inputs.add(IngredientKey.EMPTY);
+                } else {
+                    addSlotAsIngredient(slot, inputs);
+                }
             }
         } else if (display instanceof ShapelessCraftingRecipeDisplay shapeless) {
             for (SlotDisplay slot : shapeless.ingredients()) {

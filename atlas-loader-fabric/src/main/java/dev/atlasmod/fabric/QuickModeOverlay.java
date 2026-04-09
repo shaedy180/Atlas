@@ -162,7 +162,14 @@ public final class QuickModeOverlay {
         int startY = gridStartY();
         int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
 
-        if (mouseY >= startY) {
+        // Compute the bottom boundary of the item grid (exclude recipe preview area)
+        int panelBottom = screen.height - PADDING;
+        int gridBottom = panelBottom;
+        if (selectedEntry != null && !selectedRecipes.isEmpty()) {
+            gridBottom = panelBottom - RECIPE_PREVIEW_HEIGHT;
+        }
+
+        if (mouseY >= startY && mouseY < gridBottom) {
             int relX = (int) mouseX - panelX - PADDING;
             int relY = (int) mouseY - startY;
             int col = relX / ITEM_SIZE;
@@ -331,7 +338,7 @@ public final class QuickModeOverlay {
                         // Slot background
                         gfx.fill(sx, sy, sx + GRID_SLOT - 1, sy + GRID_SLOT - 1, 0x44FFFFFF);
 
-                        if (slotIdx < inputs.size()) {
+                        if (slotIdx < inputs.size() && !inputs.get(slotIdx).isEmpty()) {
                             ItemStack inputStack = ingredientToStack(inputs.get(slotIdx));
                             if (!inputStack.isEmpty()) {
                                 gfx.item(inputStack, sx, sy);
@@ -361,6 +368,7 @@ public final class QuickModeOverlay {
                 int ix = x;
                 for (var input : inputs) {
                     if (ix + GRID_SLOT > x + PANEL_WIDTH - PADDING * 2) break;
+                    if (input.isEmpty()) continue;
                     ItemStack inputStack = ingredientToStack(input);
                     if (!inputStack.isEmpty()) {
                         gfx.item(inputStack, ix, y);

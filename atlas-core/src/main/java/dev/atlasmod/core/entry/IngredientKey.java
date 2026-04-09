@@ -12,10 +12,15 @@ import java.util.Objects;
  */
 public record IngredientKey(String type, String id, boolean tagBased) {
 
+    /** Sentinel for empty grid slots in shaped recipes. */
+    public static final IngredientKey EMPTY = new IngredientKey("empty", "", false);
+
     public IngredientKey {
         Objects.requireNonNull(type, "type must not be null");
         Objects.requireNonNull(id, "id must not be null");
     }
+
+    public boolean isEmpty() { return this == EMPTY; }
 
     public static IngredientKey item(String id) {
         return new IngredientKey("item", id, false);

@@ -205,6 +205,8 @@ public class AtlasScreen extends Screen {
         }
     }
 
+    private static final int GRID_SLOT = 18;
+
     private void drawCraftTab(GuiGraphicsExtractor gfx, int x, int y) {
         if (selectedRecipes.isEmpty()) {
             gfx.text(font, Component.literal("No recipes found"), x, y, TEXT_COLOR);
@@ -212,33 +214,76 @@ public class AtlasScreen extends Screen {
         }
 
         for (RecipeNode recipe : selectedRecipes) {
+            if (y > height - 20) break;
+
             // Recipe category label
             gfx.text(font, Component.literal("[" + recipe.categoryId() + "]"), x, y, 0xFF8888FF);
             y += 12;
 
-            // Inputs
-            int inputX = x;
-            for (var input : recipe.inputs()) {
-                ItemStack inputStack = ingredientToStack(input);
-                if (!inputStack.isEmpty()) {
-                    gfx.item(inputStack, inputX, y);
-                    inputX += ITEM_SIZE;
-                }
-            }
+            int gw = recipe.gridWidth();
+            int gh = recipe.gridHeight();
+            var inputs = recipe.inputs();
+            var outputs = recipe.outputs();
 
-            // Arrow
-            gfx.text(font, Component.literal("->"), inputX + 4, y + 4, TEXT_COLOR);
-            inputX += 20;
+            if (gw > 0 && gh > 0) {
+                // ── Shaped crafting: render as a real grid ──
+                int gridPixelW = gw * GRID_SLOT;
+                int gridPixelH = gh * GRID_SLOT;
 
-            // Outputs
-            for (var output : recipe.outputs()) {
-                ItemStack outputStack = entryToStack(output);
-                if (!outputStack.isEmpty()) {
-                    gfx.item(outputStack, inputX, y);
-                    inputX += ITEM_SIZE;
+                for (int row = 0; row < gh; row++) {
+                    for (int col = 0; col < gw; col++) {
+                        int slotIdx = row * gw + col;
+                        int sx = x + col * GRID_SLOT;
+                        int sy = y + row * GRID_SLOT;
+                        // Slot background
+                        gfx.fill(sx, sy, sx + GRID_SLOT - 1, sy + GRID_SLOT - 1, 0x44FFFFFF);
+
+                        if (slotIdx < inputs.size() && !inputs.get(slotIdx).isEmpty()) {
+                            ItemStack inputStack = ingredientToStack(inputs.get(slotIdx));
+                            if (!inputStack.isEmpty()) {
+                                gfx.item(inputStack, sx, sy);
+                            }
+                        }
+                    }
                 }
+
+                // Arrow and output centered vertically
+                int arrowX = x + gridPixelW + 4;
+                int centerY = y + gridPixelH / 2 - 4;
+                gfx.text(font, Component.literal("\u2192"), arrowX, centerY, TEXT_COLOR);
+
+                int outX = arrowX + 14;
+                int outY = y + gridPixelH / 2 - GRID_SLOT / 2;
+                for (var output : outputs) {
+                    ItemStack outputStack = entryToStack(output);
+                    if (!outputStack.isEmpty()) {
+                        gfx.item(outputStack, outX, outY);
+                        outX += GRID_SLOT;
+                    }
+                }
+                y += gridPixelH + 4;
+            } else {
+                // ── Shapeless / other: compact horizontal row ──
+                int inputX = x;
+                for (var input : inputs) {
+                    if (input.isEmpty()) continue;
+                    ItemStack inputStack = ingredientToStack(input);
+                    if (!inputStack.isEmpty()) {
+                        gfx.item(inputStack, inputX, y);
+                        inputX += GRID_SLOT;
+                    }
+                }
+                gfx.text(font, Component.literal("\u2192"), inputX + 4, y + 4, TEXT_COLOR);
+                inputX += 14;
+                for (var output : outputs) {
+                    ItemStack outputStack = entryToStack(output);
+                    if (!outputStack.isEmpty()) {
+                        gfx.item(outputStack, inputX, y);
+                        inputX += GRID_SLOT;
+                    }
+                }
+                y += GRID_SLOT + 4;
             }
-            y += ITEM_SIZE + 4;
 
             // Processing time if present
             if (recipe.processingTime() > 0) {
