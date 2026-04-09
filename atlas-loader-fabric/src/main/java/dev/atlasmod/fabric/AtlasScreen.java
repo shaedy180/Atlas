@@ -18,6 +18,9 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,6 +29,8 @@ import java.util.List;
  * Opened via keybinding (default: U).
  */
 public class AtlasScreen extends Screen {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Atlas/DeepMode");
 
     // Layout constants
     private static final int SEARCH_HEIGHT = 20;
@@ -60,6 +65,7 @@ public class AtlasScreen extends Screen {
     @Override
     protected void init() {
         super.init();
+        LOGGER.info("[Atlas] Deep Mode init: {}x{}", width, height);
 
         int leftPanelWidth = panelDividerX();
 
@@ -109,9 +115,6 @@ public class AtlasScreen extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor gfx, int mouseX, int mouseY, float partialTick) {
-        // Darken the background
-        extractTransparentBackground(gfx);
-
         int dividerX = panelDividerX();
 
         // Left panel background
@@ -347,6 +350,11 @@ public class AtlasScreen extends Screen {
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    @Override
+    public boolean isInGameUi() {
+        return true;
     }
 
     // ── Utility: convert entry/ingredient IDs to ItemStack ──────────────

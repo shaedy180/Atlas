@@ -8,7 +8,6 @@ import dev.atlasmod.search.SearchQuery;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
-import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.screens.Screen;
@@ -21,6 +20,8 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -30,6 +31,8 @@ import java.util.List;
  * Toggled via keybind (default: O).
  */
 public final class QuickModeOverlay {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Atlas/QuickMode");
 
     private static boolean enabled = false;
     private static String searchText = "";
@@ -162,6 +165,7 @@ public final class QuickModeOverlay {
             if (col >= 0 && col < columns && idx >= 0 && idx < results.size()) {
                 selectedEntry = results.get(idx);
                 selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                LOGGER.info("[Atlas] Quick select: {} -> {} recipes", selectedEntry.id(), selectedRecipes.size());
                 return true;
             }
         }
@@ -214,7 +218,7 @@ public final class QuickModeOverlay {
     // ── Rendering ────────────────────────────────────────────────────────
 
     private static void drawOverlay(GuiGraphicsExtractor gfx, Screen screen, int mouseX, int mouseY) {
-        Font font = Screens.getFont(screen);
+        Font font = screen.getFont();
         int panelX = panelX(screen);
         int panelY = PADDING;
         int panelH = screen.height - PADDING * 2;
