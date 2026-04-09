@@ -1,7 +1,8 @@
 package dev.atlasmod.fabric;
 
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -9,7 +10,8 @@ import org.lwjgl.glfw.GLFW;
  */
 public final class AtlasKeyBindings {
 
-    public static final String CATEGORY = "key.categories.atlas";
+    public static final KeyMapping.Category CATEGORY =
+            KeyMapping.Category.register(Identifier.fromNamespaceAndPath("atlas", "keybinds"));
 
     public static KeyMapping openAtlas;
     public static KeyMapping toggleQuickMode;
@@ -18,19 +20,19 @@ public final class AtlasKeyBindings {
     private AtlasKeyBindings() {}
 
     public static void register() {
-        openAtlas = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+        openAtlas = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.atlas.open",
                 GLFW.GLFW_KEY_U,
                 CATEGORY
         ));
 
-        toggleQuickMode = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+        toggleQuickMode = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.atlas.quick_toggle",
                 GLFW.GLFW_KEY_O,
                 CATEGORY
         ));
 
-        focusSearch = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+        focusSearch = KeyMappingHelper.registerKeyMapping(new KeyMapping(
                 "key.atlas.focus_search",
                 GLFW.GLFW_KEY_UNKNOWN,
                 CATEGORY

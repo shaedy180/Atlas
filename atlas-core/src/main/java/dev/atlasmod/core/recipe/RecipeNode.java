@@ -6,6 +6,7 @@ import dev.atlasmod.core.entry.StationKey;
 import dev.atlasmod.core.unlock.UnlockCondition;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -63,8 +64,8 @@ public final class RecipeNode {
         private List<AcquisitionSource> sources;
 
         private Builder(String id, String categoryId) {
-            this.id = id;
-            this.categoryId = categoryId;
+            this.id = Objects.requireNonNull(id, "recipe id must not be null");
+            this.categoryId = Objects.requireNonNull(categoryId, "categoryId must not be null");
         }
 
         public Builder inputs(List<IngredientKey> inputs) { this.inputs = inputs; return this; }

@@ -61,6 +61,11 @@ public final class RecipeGraph {
         inStack.add(node.id());
 
         for (var input : node.inputs()) {
+            // Tag-based ingredients don't map to a single entry, so skip them
+            // for cycle detection. Cycles through tags would require tag
+            // resolution which lives in a higher layer.
+            if (input.tagBased()) continue;
+
             EntryKey inputEntry = new EntryKey(input.type(), input.id());
             for (RecipeNode producer : recipesFor(inputEntry)) {
                 if (detectCycleDfs(producer, visited, inStack)) {

@@ -7,10 +7,9 @@ val fabricApiVersion: String = rootProject.property("fabric_api_version") as Str
 val loaderVersion: String = rootProject.property("loader_version") as String
 
 dependencies {
-    minecraft("com.mojang:minecraft:$minecraftVersion")
-    mappings(loom.officialMojangMappings())
-    modImplementation("net.fabricmc:fabric-loader:$loaderVersion")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
+    "minecraft"("com.mojang:minecraft:$minecraftVersion")
+    implementation("net.fabricmc:fabric-loader:$loaderVersion")
+    implementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
 
     implementation(project(":atlas-core"))
     implementation(project(":atlas-api"))
@@ -32,6 +31,8 @@ loom {
 }
 
 tasks.jar {
+    archiveBaseName.set("atlas")
+
     from(project(":atlas-core").sourceSets.main.get().output)
     from(project(":atlas-api").sourceSets.main.get().output)
     from(project(":atlas-search").sourceSets.main.get().output)
@@ -40,8 +41,4 @@ tasks.jar {
     manifest {
         attributes("Implementation-Version" to project.version)
     }
-}
-
-tasks.named<net.fabricmc.loom.task.RemapJarTask>("remapJar") {
-    archiveBaseName.set("atlas")
 }

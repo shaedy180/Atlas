@@ -9,6 +9,7 @@ import dev.atlasmod.core.unlock.UnlockCondition;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -27,8 +28,8 @@ public final class RecipeRegistration {
     private UnlockCondition unlockCondition;
 
     public RecipeRegistration(RecipeGraph graph, String categoryId) {
-        this.graph = graph;
-        this.categoryId = categoryId;
+        this.graph = Objects.requireNonNull(graph, "graph must not be null");
+        this.categoryId = Objects.requireNonNull(categoryId, "categoryId must not be null");
     }
 
     public RecipeRegistration id(String id) {

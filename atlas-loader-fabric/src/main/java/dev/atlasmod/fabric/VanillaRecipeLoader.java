@@ -1,12 +1,15 @@
 package dev.atlasmod.fabric;
 
 import dev.atlasmod.api.AtlasApi;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Registers vanilla Minecraft recipe categories with Atlas.
  */
 public final class VanillaRecipeLoader {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(VanillaRecipeLoader.class);
 
     private VanillaRecipeLoader() {}
 
@@ -107,6 +110,6 @@ public final class VanillaRecipeLoader {
                 .order(120)
                 .register();
 
-        LoggerFactory.getLogger("atlas").info("[Atlas] Registered {} vanilla categories", 15);
+        LOGGER.info("[Atlas] Registered {} vanilla categories", 15);
     }
 }

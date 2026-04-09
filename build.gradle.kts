@@ -1,14 +1,14 @@
 plugins {
-    id("net.fabricmc.fabric-loom") version providers.gradleProperty("loom_version").get() apply false
+    id("net.fabricmc.fabric-loom") apply false
     `java-library`
 }
 
-val modVersion: String by project
-val modGroup: String by project
+val mod_version: String by project
+val mod_group: String by project
 
 allprojects {
-    group = modGroup
-    version = modVersion
+    group = mod_group
+    version = mod_version
 
     repositories {
         mavenCentral()

@@ -3,15 +3,19 @@ package dev.atlasmod.api.registration;
 import dev.atlasmod.core.category.RecipeCategory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
  * Fluent builder for registering recipe categories with Atlas.
+ *
+ * Pending registrations accumulate in a synchronized list and are drained
+ * by the Atlas runtime during initialization. This is safe for concurrent
+ * registration from multiple mod entrypoints.
  */
 public final class CategoryRegistration {
 
-    // Static registry — will be consumed by the Atlas runtime
-    private static final List<RecipeCategory> PENDING = new ArrayList<>();
+    private static final List<RecipeCategory> PENDING = Collections.synchronizedList(new ArrayList<>());
 
     private final String id;
     private String name;
@@ -43,8 +47,10 @@ public final class CategoryRegistration {
     }
 
     public static List<RecipeCategory> drainPending() {
-        List<RecipeCategory> result = List.copyOf(PENDING);
-        PENDING.clear();
-        return result;
+        synchronized (PENDING) {
+            List<RecipeCategory> result = List.copyOf(PENDING);
+            PENDING.clear();
+            return result;
+        }
     }
 }

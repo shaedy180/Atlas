@@ -40,15 +40,15 @@ public record SearchQuery(
         var textTokens = new java.util.ArrayList<String>();
 
         for (String token : tokens) {
-            if (token.startsWith("@")) {
+            if (token.startsWith("@") && token.length() > 1) {
                 mod = token.substring(1);
-            } else if (token.startsWith("#")) {
+            } else if (token.startsWith("#") && token.length() > 1) {
                 tooltip = token.substring(1);
-            } else if (token.startsWith("$")) {
+            } else if (token.startsWith("$") && token.length() > 1) {
                 tag = token.substring(1);
-            } else if (token.startsWith(">")) {
+            } else if (token.startsWith(">") && token.length() > 1) {
                 source = token.substring(1);
-            } else if (token.startsWith("=")) {
+            } else if (token.startsWith("=") && token.length() > 1) {
                 station = token.substring(1);
             } else if (token.equals("~unlocked")) {
                 unlocked = true;
