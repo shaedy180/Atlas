@@ -8,11 +8,13 @@ import dev.atlasmod.core.recipe.RecipeNode;
 import dev.atlasmod.search.SearchIndex;
 import dev.atlasmod.search.SearchQuery;
 import dev.atlasmod.ui.DeepModeTab;
+import dev.atlasmod.ui.PinnedPlanManager;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -20,6 +22,7 @@ import net.minecraft.tags.TagKey;
 import net.minecraft.util.Util;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import org.lwjgl.glfw.GLFW;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -206,6 +209,11 @@ public class AtlasScreen extends Screen {
                 gfx.fill(x - 1, y - 1, x + ITEM_SIZE - 1, y + ITEM_SIZE - 1, HIGHLIGHT_COLOR);
             }
 
+            // Pin indicator (small yellow dot, top-right corner)
+            if (AtlasFabricClient.pinnedPlanManager().isPinned(entry)) {
+                gfx.fill(x + ITEM_SIZE - 5, y, x + ITEM_SIZE - 2, y + 3, 0xFFFFCC44);
+            }
+
             // Render item icon
             ItemStack stack = entryToStack(entry);
             if (!stack.isEmpty()) {
@@ -231,12 +239,25 @@ public class AtlasScreen extends Screen {
             return;
         }
 
-        // Show selected item name
+        // Show selected item name + pin button
         ItemStack stack = entryToStack(selectedEntry);
         if (!stack.isEmpty()) {
             gfx.item(stack, startX, startY);
             gfx.text(font, stack.getHoverName(), startX + 20, startY + 4, HEADER_COLOR);
         }
+
+        // Pin button next to item name
+        PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
+        boolean pinned = pm.isPinned(selectedEntry);
+        String pinLabel = pinned ? "Unpin" : "Pin";
+        int pinW = font.width(pinLabel) + 8;
+        int pinX = width - pinW - 8;
+        int pinY = startY + 2;
+        int pinBg = pinned ? 0x88885533 : 0x66404060;
+        gfx.fill(pinX, pinY, pinX + pinW, pinY + 14, pinBg);
+        gfx.text(font, Component.literal(pinLabel), pinX + 4, pinY + 3,
+                pinned ? 0xFFFFCC44 : 0xFFAAAAFF);
+
         startY += 24;
 
         // Tab-specific content
@@ -479,6 +500,23 @@ public class AtlasScreen extends Screen {
         double mouseX = event.x();
         double mouseY = event.y();
 
+        // Pin button click detection (right side of recipe panel header)
+        if (selectedEntry != null) {
+            int pinHeaderY = HEADER_HEIGHT + TAB_HEIGHT + 8 + 2;
+            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unpin" : "Pin";
+            int pinW = font.width(pinLabel) + 8;
+            int pinX = width - pinW - 8;
+            if (mouseX >= pinX && mouseX < pinX + pinW && mouseY >= pinHeaderY && mouseY < pinHeaderY + 14) {
+                PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
+                if (pm.isPinned(selectedEntry)) {
+                    pm.unpin(selectedEntry);
+                } else {
+                    pm.pin(selectedEntry, 1);
+                }
+                return true;
+            }
+        }
+
         // Check if click is in the item grid
         int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24;
         int startX = 6;
@@ -492,6 +530,10 @@ public class AtlasScreen extends Screen {
             if (col < gridColumns && idx >= 0 && idx < searchResults.size()) {
                 selectedEntry = searchResults.get(idx);
                 selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+
+                // Creative mode: give item to player
+                giveItemIfCreative(selectedEntry, event);
+
                 return true;
             }
         }
@@ -517,6 +559,23 @@ public class AtlasScreen extends Screen {
     @Override
     public boolean isInGameUi() {
         return true;
+    }
+
+    // ── Creative Mode ─────────────────────────────────────────────────
+
+    private void giveItemIfCreative(EntryKey entry, MouseButtonEvent event) {
+        var mc = Minecraft.getInstance();
+        if (mc.player == null || !mc.player.getAbilities().instabuild || mc.gameMode == null) return;
+
+        ItemStack stack = entryToStack(entry);
+        if (stack.isEmpty()) return;
+
+        boolean shifted = (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
+        stack = stack.copy();
+        stack.setCount(shifted ? stack.getMaxStackSize() : 1);
+
+        mc.gameMode.handleCreativeModeItemAdd(stack, 36 + mc.player.getInventory().getSelectedSlot());
+        LOGGER.info("[Atlas] Creative give: {} x{}", entry.id(), stack.getCount());
     }
 
     // ── Utility: convert entry/ingredient IDs to ItemStack ──────────────

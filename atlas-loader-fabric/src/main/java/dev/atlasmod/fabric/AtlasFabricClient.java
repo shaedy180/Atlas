@@ -5,12 +5,15 @@ import dev.atlasmod.core.invalidation.InvalidationEngine;
 import dev.atlasmod.core.invalidation.InvalidationEvent;
 import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.search.SearchIndex;
+import dev.atlasmod.ui.PinnedPlanManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.nio.file.Path;
 
 /**
  * Fabric client entry point for Atlas.
@@ -25,6 +28,9 @@ public final class AtlasFabricClient implements ClientModInitializer {
     private static RecipeGraph recipeGraph;
     private static InvalidationEngine invalidationEngine;
     private static SearchIndex searchIndex;
+    private static PinnedPlanManager pinnedPlanManager;
+
+    private static final String PINS_FILE = "atlas_pins.txt";
 
     // Guard: load recipes once per world join (reset on disconnect)
     private static boolean recipesLoaded = false;
@@ -36,6 +42,7 @@ public final class AtlasFabricClient implements ClientModInitializer {
         recipeGraph = new RecipeGraph();
         invalidationEngine = new InvalidationEngine();
         searchIndex = new SearchIndex();
+        pinnedPlanManager = new PinnedPlanManager();
 
         AtlasApi.init(recipeGraph);
 
@@ -60,9 +67,23 @@ public final class AtlasFabricClient implements ClientModInitializer {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             recipesLoaded = false;
             LOGGER.debug("[Atlas] Play connection joined, scheduling recipe load");
+            // Load pinned plans
+            try {
+                pinnedPlanManager.load(pinsPath());
+                LOGGER.debug("[Atlas] Loaded {} pinned plans", pinnedPlanManager.plans().size());
+            } catch (Exception e) {
+                LOGGER.warn("[Atlas] Failed to load pinned plans", e);
+            }
         });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            // Save pinned plans before clearing state
+            try {
+                pinnedPlanManager.save(pinsPath());
+                LOGGER.debug("[Atlas] Saved {} pinned plans", pinnedPlanManager.plans().size());
+            } catch (Exception e) {
+                LOGGER.warn("[Atlas] Failed to save pinned plans", e);
+            }
             recipesLoaded = false;
             recipeGraph.clear();
             searchIndex.clear();
@@ -100,4 +121,9 @@ public final class AtlasFabricClient implements ClientModInitializer {
     public static RecipeGraph recipeGraph() { return recipeGraph; }
     public static InvalidationEngine invalidationEngine() { return invalidationEngine; }
     public static SearchIndex searchIndex() { return searchIndex; }
+    public static PinnedPlanManager pinnedPlanManager() { return pinnedPlanManager; }
+
+    private static Path pinsPath() {
+        return Minecraft.getInstance().gameDirectory.toPath().resolve(PINS_FILE);
+    }
 }
