@@ -54,7 +54,7 @@ public final class QuickModeOverlay {
     private static final int HEADER_HEIGHT = 16;
     private static final int SEARCH_HEIGHT = 16;
     private static final int MAX_SEARCH_CHARS = 64;
-    private static final int RECIPE_PREVIEW_HEIGHT = 80;
+    private static final int RECIPE_PREVIEW_HEIGHT = 68;
 
     // Colors
     private static final int BG_COLOR = 0xCC101018;
@@ -319,27 +319,30 @@ public final class QuickModeOverlay {
             if (y + GRID_SLOT > bottomY) break;
             if (shown >= 2) break;
 
-            int gw = recipe.gridWidth();
-            int gh = recipe.gridHeight();
+            String label = categoryLabel(recipe.categoryId());
             var inputs = recipe.inputs();
             var outputs = recipe.outputs();
+            boolean isCrafting = recipe.categoryId().equals("minecraft:crafting");
 
-            if (gw > 0 && gh > 0) {
-                // ── Shaped crafting: render as a real grid ──
-                int gridPixelW = gw * GRID_SLOT;
-                int gridPixelH = gh * GRID_SLOT;
+            // Category label
+            gfx.text(font, Component.literal(label), x, y, 0xFF8888FF);
+            y += 10;
 
-                // Grid on the left
-                for (int row = 0; row < gh; row++) {
-                    for (int col = 0; col < gw; col++) {
-                        int slotIdx = row * gw + col;
+            if (isCrafting) {
+                // ── Always render a full 3x3 crafting grid ──
+                int gw = recipe.gridWidth();
+                int gh = recipe.gridHeight();
+                int gridPixelSize = 3 * GRID_SLOT;
+
+                for (int row = 0; row < 3; row++) {
+                    for (int col = 0; col < 3; col++) {
                         int sx = x + col * GRID_SLOT;
                         int sy = y + row * GRID_SLOT;
-                        // Slot background
                         gfx.fill(sx, sy, sx + GRID_SLOT - 1, sy + GRID_SLOT - 1, 0x44FFFFFF);
 
-                        if (slotIdx < inputs.size() && !inputs.get(slotIdx).isEmpty()) {
-                            ItemStack inputStack = ingredientToStack(inputs.get(slotIdx));
+                        IngredientKey ingredient = getGridIngredient(inputs, gw, gh, row, col);
+                        if (ingredient != null && !ingredient.isEmpty()) {
+                            ItemStack inputStack = ingredientToStack(ingredient);
                             if (!inputStack.isEmpty()) {
                                 gfx.item(inputStack, sx, sy);
                             }
@@ -347,13 +350,13 @@ public final class QuickModeOverlay {
                     }
                 }
 
-                // Arrow and output, centered vertically next to the grid
-                int arrowX = x + gridPixelW + 3;
-                int centerY = y + gridPixelH / 2 - 4;
+                // Arrow and output centered vertically next to the 3x3 grid
+                int arrowX = x + gridPixelSize + 3;
+                int centerY = y + gridPixelSize / 2 - 4;
                 gfx.text(font, Component.literal("\u2192"), arrowX, centerY, TEXT_COLOR);
 
                 int outX = arrowX + 12;
-                int outY = y + gridPixelH / 2 - GRID_SLOT / 2;
+                int outY = y + gridPixelSize / 2 - GRID_SLOT / 2;
                 for (var output : outputs) {
                     ItemStack outputStack = entryToStack(output);
                     if (!outputStack.isEmpty()) {
@@ -361,10 +364,9 @@ public final class QuickModeOverlay {
                         outX += GRID_SLOT;
                     }
                 }
-
-                y += gridPixelH + 3;
+                y += gridPixelSize + 3;
             } else {
-                // ── Shapeless / other: compact horizontal row ──
+                // ── Non-crafting: compact input → output row ──
                 int ix = x;
                 for (var input : inputs) {
                     if (ix + GRID_SLOT > x + PANEL_WIDTH - PADDING * 2) break;
@@ -388,6 +390,45 @@ public final class QuickModeOverlay {
             }
             shown++;
         }
+    }
+
+    /**
+     * Returns the ingredient for a position in a 3x3 crafting grid.
+     * For shaped recipes (gw x gh), the recipe is placed top-left.
+     * For shapeless (gw == 0), items fill left-to-right, top-to-bottom.
+     */
+    private static IngredientKey getGridIngredient(List<IngredientKey> inputs, int gw, int gh, int row, int col) {
+        if (gw > 0 && gh > 0) {
+            // Shaped: only cells within the recipe dimensions have content
+            if (col < gw && row < gh) {
+                int idx = row * gw + col;
+                return idx < inputs.size() ? inputs.get(idx) : IngredientKey.EMPTY;
+            }
+            return IngredientKey.EMPTY;
+        }
+        // Shapeless: fill sequentially
+        int idx = row * 3 + col;
+        return idx < inputs.size() ? inputs.get(idx) : IngredientKey.EMPTY;
+    }
+
+    /**
+     * Maps a category ID to a short human-readable label.
+     */
+    private static String categoryLabel(String categoryId) {
+        return switch (categoryId) {
+            case "minecraft:crafting"     -> "Crafting";
+            case "minecraft:smelting"     -> "Smelting";
+            case "minecraft:blasting"     -> "Blasting";
+            case "minecraft:smoking"      -> "Smoking";
+            case "minecraft:campfire"     -> "Campfire";
+            case "minecraft:stonecutting" -> "Stonecutting";
+            case "minecraft:smithing"     -> "Smithing";
+            default -> {
+                // Strip namespace, capitalize
+                String raw = categoryId.contains(":") ? categoryId.substring(categoryId.indexOf(':') + 1) : categoryId;
+                yield raw.substring(0, 1).toUpperCase() + raw.substring(1).replace('_', ' ');
+            }
+        };
     }
 
     // ── Utility ──────────────────────────────────────────────────────────
