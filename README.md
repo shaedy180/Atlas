@@ -4,6 +4,11 @@ A recipe and item intelligence mod for Minecraft 26.1 (Fabric).
 
 Atlas goes beyond the typical recipe viewer. Instead of just showing you flat recipe cards, it gives you a complete picture of how to get any item in the game, which recipes use it, where it comes from, and what alternatives exist. It works with vanilla and modded content out of the box.
 
+<img width="1919" height="1079" alt="Screenshot 2026-04-09 130153" src="https://github.com/user-attachments/assets/6f2744fa-f869-4a8c-af54-de2c8b673e3b" />
+
+<img width="1186" height="1075" alt="image" src="https://github.com/user-attachments/assets/2f72dafd-aa8d-41d7-b82d-6602e5b2b309" />
+
+
 ## What it does
 
 **Quick Mode** shows up as a resizable panel on the side of your inventory. Browse items, search by name, mod, tag or tooltip, and see recipes right there without leaving your crafting table. It stays out of your way but is always one keypress away.
