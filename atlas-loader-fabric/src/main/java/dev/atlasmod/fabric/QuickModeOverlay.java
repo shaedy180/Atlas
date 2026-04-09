@@ -47,7 +47,7 @@ public final class QuickModeOverlay {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Atlas/QuickMode");
 
-    private static boolean enabled = false;
+    private static boolean enabled = true;
     private static String searchText = "";
     private static boolean searchFocused = false;
     private static List<EntryKey> results = List.of();
@@ -995,8 +995,10 @@ public final class QuickModeOverlay {
         gfx.text(font, Component.literal("Use the filter buttons"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("to filter by mod/saved."), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Scroll to browse items."), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("Drag left edge to resize."), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("Press O to toggle panel."), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Press Esc to close help."), x, y, TEXT_COLOR);
+        gfx.text(font, Component.literal("Press Esc to close help."), x, y, TEXT_COLOR); y += lineH + 4;
+        gfx.text(font, Component.literal("github.com/shaedy180/Atlas"), x, y, 0xFF666688);
     }
 
     private static boolean isPointInPanel(Screen screen, double mouseX, double mouseY) {

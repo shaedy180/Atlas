@@ -11,7 +11,7 @@ import org.lwjgl.glfw.GLFW;
 public final class AtlasKeyBindings {
 
     public static final KeyMapping.Category CATEGORY =
-            KeyMapping.Category.register(Identifier.fromNamespaceAndPath("atlas", "keybinds"));
+            KeyMapping.Category.register(Identifier.fromNamespaceAndPath("atlas", "atlas"));
 
     public static KeyMapping openAtlas;
     public static KeyMapping toggleQuickMode;

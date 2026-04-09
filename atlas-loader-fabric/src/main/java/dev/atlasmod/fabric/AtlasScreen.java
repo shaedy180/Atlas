@@ -633,7 +633,8 @@ public class AtlasScreen extends Screen {
         gfx.text(font, Component.literal("Use the filter buttons (All / Vanilla / Saved)"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("to narrow results. Mod filters auto-detected."), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Keybinds: U to open, Esc to close."), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Click ? again to close this help."), x, y, TEXT_COLOR);
+        gfx.text(font, Component.literal("Click ? again to close this help."), x, y, TEXT_COLOR); y += lineH + 4;
+        gfx.text(font, Component.literal("github.com/shaedy180/Atlas"), x, y, 0xFF666688);
     }
 
     // ── Input handling ──────────────────────────────────────────────────

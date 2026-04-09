@@ -10,7 +10,8 @@
   "contact": {
     "homepage": "https://github.com/shaedy180/Atlas",
     "sources": "https://github.com/shaedy180/Atlas",
-    "issues": "https://github.com/shaedy180/Atlas/issues"
+    "issues": "https://github.com/shaedy180/Atlas/issues",
+    "donate": "https://ko-fi.com/shaedy"
   },
   "license": "LGPL-3.0-or-later",
   "icon": "assets/atlas/icon.png",
