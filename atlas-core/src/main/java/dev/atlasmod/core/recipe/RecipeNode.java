@@ -23,6 +23,8 @@ public final class RecipeNode {
     private final StationKey station;
     private final int processingTime;
     private final int energyCost;
+    private final int gridWidth;
+    private final int gridHeight;
     private final UnlockCondition unlockCondition;
     private final List<AcquisitionSource> sources;
 
@@ -34,6 +36,8 @@ public final class RecipeNode {
         this.station = builder.station;
         this.processingTime = builder.processingTime;
         this.energyCost = builder.energyCost;
+        this.gridWidth = builder.gridWidth;
+        this.gridHeight = builder.gridHeight;
         this.unlockCondition = builder.unlockCondition;
         this.sources = builder.sources == null ? List.of() : List.copyOf(builder.sources);
     }
@@ -45,6 +49,10 @@ public final class RecipeNode {
     public Optional<StationKey> station() { return Optional.ofNullable(station); }
     public int processingTime() { return processingTime; }
     public int energyCost() { return energyCost; }
+    /** Grid width for shaped recipes (0 if not shaped). */
+    public int gridWidth() { return gridWidth; }
+    /** Grid height for shaped recipes (0 if not shaped). */
+    public int gridHeight() { return gridHeight; }
     public Optional<UnlockCondition> unlockCondition() { return Optional.ofNullable(unlockCondition); }
     public List<AcquisitionSource> sources() { return sources; }
 
@@ -60,6 +68,8 @@ public final class RecipeNode {
         private StationKey station;
         private int processingTime;
         private int energyCost;
+        private int gridWidth;
+        private int gridHeight;
         private UnlockCondition unlockCondition;
         private List<AcquisitionSource> sources;
 
@@ -73,6 +83,7 @@ public final class RecipeNode {
         public Builder station(StationKey station) { this.station = station; return this; }
         public Builder processingTime(int ticks) { this.processingTime = ticks; return this; }
         public Builder energyCost(int energy) { this.energyCost = energy; return this; }
+        public Builder grid(int width, int height) { this.gridWidth = width; this.gridHeight = height; return this; }
         public Builder unlockCondition(UnlockCondition cond) { this.unlockCondition = cond; return this; }
         public Builder sources(List<AcquisitionSource> sources) { this.sources = sources; return this; }
 

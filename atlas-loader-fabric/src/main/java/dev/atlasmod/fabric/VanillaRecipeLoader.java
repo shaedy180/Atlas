@@ -148,6 +148,11 @@ public final class VanillaRecipeLoader {
             StationKey station = stationForCategory(categoryId);
             if (station != null) builder.station(station);
 
+            // Shaped crafting carries grid dimensions
+            if (display instanceof ShapedCraftingRecipeDisplay shaped) {
+                builder.grid(shaped.width(), shaped.height());
+            }
+
             // Furnace displays carry duration and experience
             if (display instanceof FurnaceRecipeDisplay furnace) {
                 builder.processingTime(furnace.duration());

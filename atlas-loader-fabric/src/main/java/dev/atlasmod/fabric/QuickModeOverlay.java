@@ -49,10 +49,12 @@ public final class QuickModeOverlay {
     // Layout
     private static final int PANEL_WIDTH = 130;
     private static final int ITEM_SIZE = 18;
+    private static final int GRID_SLOT = 16;
     private static final int PADDING = 4;
     private static final int HEADER_HEIGHT = 16;
     private static final int SEARCH_HEIGHT = 16;
     private static final int MAX_SEARCH_CHARS = 64;
+    private static final int RECIPE_PREVIEW_HEIGHT = 80;
 
     // Colors
     private static final int BG_COLOR = 0xCC101018;
@@ -226,17 +228,14 @@ public final class QuickModeOverlay {
         int panelX = panelX(screen);
         int panelY = PADDING;
         int panelH = screen.height - PADDING * 2;
+        int panelBottom = panelY + panelH;
 
         // Panel background and border
-        gfx.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + panelH, BG_COLOR);
-        // Top border
+        gfx.fill(panelX, panelY, panelX + PANEL_WIDTH, panelBottom, BG_COLOR);
         gfx.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + 1, BORDER_COLOR);
-        // Bottom border
-        gfx.fill(panelX, panelY + panelH - 1, panelX + PANEL_WIDTH, panelY + panelH, BORDER_COLOR);
-        // Left border
-        gfx.fill(panelX, panelY, panelX + 1, panelY + panelH, BORDER_COLOR);
-        // Right border
-        gfx.fill(panelX + PANEL_WIDTH - 1, panelY, panelX + PANEL_WIDTH, panelY + panelH, BORDER_COLOR);
+        gfx.fill(panelX, panelBottom - 1, panelX + PANEL_WIDTH, panelBottom, BORDER_COLOR);
+        gfx.fill(panelX, panelY, panelX + 1, panelBottom, BORDER_COLOR);
+        gfx.fill(panelX + PANEL_WIDTH - 1, panelY, panelX + PANEL_WIDTH, panelBottom, BORDER_COLOR);
 
         // Header
         gfx.text(font, Component.literal("Atlas Quick"), panelX + PADDING, panelY + 3, HEADER_COLOR);
@@ -251,17 +250,20 @@ public final class QuickModeOverlay {
         int searchTextColor = searchText.isEmpty() ? 0xFF888888 : TEXT_COLOR;
         gfx.text(font, Component.literal(shownQuery), searchX + 3, searchY + 4, searchTextColor);
 
-        int y = gridStartY();
-
-        // Item grid
+        int gridTop = gridStartY();
         int columns = Math.max(1, (PANEL_WIDTH - PADDING * 2) / ITEM_SIZE);
-        int maxRows = (panelH - HEADER_HEIGHT - 4) / ITEM_SIZE;
 
-        // Split: top half for items, bottom half for recipe preview
-        int itemRows = selectedEntry != null ? maxRows / 2 : maxRows;
+        // Reserve space at the bottom for recipe preview when an item is selected
+        int recipeAreaTop = panelBottom - PADDING;
+        if (selectedEntry != null && !selectedRecipes.isEmpty()) {
+            recipeAreaTop = panelBottom - RECIPE_PREVIEW_HEIGHT;
+        }
+
+        int gridBottom = recipeAreaTop - 2;
+        int itemRows = Math.max(1, (gridBottom - gridTop) / ITEM_SIZE);
         int visibleItems = columns * itemRows;
 
-        gfx.enableScissor(panelX + PADDING, y, panelX + PANEL_WIDTH - PADDING, y + itemRows * ITEM_SIZE);
+        gfx.enableScissor(panelX + PADDING, gridTop, panelX + PANEL_WIDTH - PADDING, gridTop + itemRows * ITEM_SIZE);
 
         for (int i = 0; i < visibleItems && (i + scrollOffset * columns) < results.size(); i++) {
             int idx = i + scrollOffset * columns;
@@ -270,9 +272,8 @@ public final class QuickModeOverlay {
             int col = i % columns;
             int row = i / columns;
             int ix = panelX + PADDING + col * ITEM_SIZE;
-            int iy = y + row * ITEM_SIZE;
+            int iy = gridTop + row * ITEM_SIZE;
 
-            // Highlight selected item
             if (entry.equals(selectedEntry)) {
                 gfx.fill(ix - 1, iy - 1, ix + ITEM_SIZE - 2, iy + ITEM_SIZE - 2, HIGHLIGHT_COLOR);
             }
@@ -289,10 +290,9 @@ public final class QuickModeOverlay {
 
         gfx.disableScissor();
 
-        // Recipe preview if an item is selected
-        if (selectedEntry != null) {
-            int recipeY = y + itemRows * ITEM_SIZE + 4;
-            drawRecipePreview(gfx, font, panelX + PADDING, recipeY, panelY + panelH - PADDING);
+        // Recipe preview at the bottom
+        if (selectedEntry != null && !selectedRecipes.isEmpty()) {
+            drawRecipePreview(gfx, font, panelX + PADDING, recipeAreaTop, panelBottom - PADDING);
         }
     }
 
@@ -302,48 +302,82 @@ public final class QuickModeOverlay {
             return;
         }
 
-        // Divider
-        gfx.fill(x - 2, y - 2, x + PANEL_WIDTH - PADDING * 2, y - 1, BORDER_COLOR);
+        // Divider line
+        gfx.fill(x - 2, y, x + PANEL_WIDTH - PADDING * 2, y + 1, BORDER_COLOR);
+        y += 3;
 
-        // Show item name
-        ItemStack stack = entryToStack(selectedEntry);
-        if (!stack.isEmpty()) {
-            gfx.item(stack, x, y);
-            gfx.text(font, stack.getHoverName(), x + 20, y + 4, HEADER_COLOR);
-        }
-        y += 20;
-
-        // Show first few recipes compactly
+        // Show at most 2 recipes
         int shown = 0;
         for (RecipeNode recipe : selectedRecipes) {
-            if (y + ITEM_SIZE > bottomY) break;
-            if (shown >= 4) break; // cap to avoid overflow
+            if (y + GRID_SLOT > bottomY) break;
+            if (shown >= 2) break;
 
-            // Category label
-            String cat = recipe.categoryId().replace("minecraft:", "").replace("atlas:", "");
-            gfx.text(font, Component.literal(cat), x, y, 0xFF8888FF);
-            y += 10;
+            int gw = recipe.gridWidth();
+            int gh = recipe.gridHeight();
+            var inputs = recipe.inputs();
+            var outputs = recipe.outputs();
 
-            // Inputs -> Output in a compact row
-            int ix = x;
-            for (var input : recipe.inputs()) {
-                if (ix + ITEM_SIZE > x + PANEL_WIDTH - PADDING * 2) break;
-                ItemStack inputStack = ingredientToStack(input);
-                if (!inputStack.isEmpty()) {
-                    gfx.item(inputStack, ix, y);
-                    ix += ITEM_SIZE;
+            if (gw > 0 && gh > 0) {
+                // ── Shaped crafting: render as a real grid ──
+                int gridPixelW = gw * GRID_SLOT;
+                int gridPixelH = gh * GRID_SLOT;
+
+                // Grid on the left
+                for (int row = 0; row < gh; row++) {
+                    for (int col = 0; col < gw; col++) {
+                        int slotIdx = row * gw + col;
+                        int sx = x + col * GRID_SLOT;
+                        int sy = y + row * GRID_SLOT;
+                        // Slot background
+                        gfx.fill(sx, sy, sx + GRID_SLOT - 1, sy + GRID_SLOT - 1, 0x44FFFFFF);
+
+                        if (slotIdx < inputs.size()) {
+                            ItemStack inputStack = ingredientToStack(inputs.get(slotIdx));
+                            if (!inputStack.isEmpty()) {
+                                gfx.item(inputStack, sx, sy);
+                            }
+                        }
+                    }
                 }
-            }
-            gfx.text(font, Component.literal(">"), ix + 2, y + 4, TEXT_COLOR);
-            ix += 12;
-            for (var output : recipe.outputs()) {
-                ItemStack outputStack = entryToStack(output);
-                if (!outputStack.isEmpty()) {
-                    gfx.item(outputStack, ix, y);
-                    ix += ITEM_SIZE;
+
+                // Arrow and output, centered vertically next to the grid
+                int arrowX = x + gridPixelW + 3;
+                int centerY = y + gridPixelH / 2 - 4;
+                gfx.text(font, Component.literal("\u2192"), arrowX, centerY, TEXT_COLOR);
+
+                int outX = arrowX + 12;
+                int outY = y + gridPixelH / 2 - GRID_SLOT / 2;
+                for (var output : outputs) {
+                    ItemStack outputStack = entryToStack(output);
+                    if (!outputStack.isEmpty()) {
+                        gfx.item(outputStack, outX, outY);
+                        outX += GRID_SLOT;
+                    }
                 }
+
+                y += gridPixelH + 3;
+            } else {
+                // ── Shapeless / other: compact horizontal row ──
+                int ix = x;
+                for (var input : inputs) {
+                    if (ix + GRID_SLOT > x + PANEL_WIDTH - PADDING * 2) break;
+                    ItemStack inputStack = ingredientToStack(input);
+                    if (!inputStack.isEmpty()) {
+                        gfx.item(inputStack, ix, y);
+                        ix += GRID_SLOT;
+                    }
+                }
+                gfx.text(font, Component.literal("\u2192"), ix + 2, y + 4, TEXT_COLOR);
+                ix += 12;
+                for (var output : outputs) {
+                    ItemStack outputStack = entryToStack(output);
+                    if (!outputStack.isEmpty()) {
+                        gfx.item(outputStack, ix, y);
+                        ix += GRID_SLOT;
+                    }
+                }
+                y += GRID_SLOT + 3;
             }
-            y += ITEM_SIZE + 2;
             shown++;
         }
     }
