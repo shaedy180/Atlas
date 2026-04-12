@@ -226,7 +226,31 @@ public class AtlasScreen extends Screen {
             searchResults = allResults.stream().filter(savedTargets::contains).toList();
         } else {
             SearchQuery query = SearchQuery.parse(text);
-            searchResults = index.search(query);
+            List<EntryKey> raw = index.search(query);
+
+            // Apply availability-based filters when requested
+            if (query.onlyUnlocked() || !query.includeHidden()) {
+                RecipeGraph graph = AtlasApi.get().recipeGraph();
+                ContextSnapshot ctx = ContextSnapshotBuilder.capture();
+                AvailabilityEngine engine = new AvailabilityEngine();
+
+                raw = raw.stream().filter(entry -> {
+                    List<RecipeNode> recipes = graph.recipesFor(entry);
+                    if (recipes.isEmpty()) return true; // no recipes means no restrictions
+
+                    for (RecipeNode recipe : recipes) {
+                        var result = engine.evaluate(recipe, ctx);
+                        // ~unlocked: only show items where at least one recipe is available
+                        if (query.onlyUnlocked() && result.available()) return true;
+                        // Default (no !hidden): skip items where all recipes are hidden
+                        if (!query.includeHidden() && result.policy() == VisibilityPolicy.HIDDEN) continue;
+                        if (!query.onlyUnlocked()) return true;
+                    }
+                    return false;
+                }).toList();
+            }
+
+            searchResults = raw;
         }
         scrollOffset = 0;
     }

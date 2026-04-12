@@ -106,6 +106,20 @@ public final class AtlasCommands {
             }
         }
 
+        // Cycle detection: sample output entries for cyclic recipe chains
+        int cyclesFound = 0;
+        Set<String> checkedOutputs = new HashSet<>();
+        for (RecipeNode node : graph.allNodes()) {
+            for (var output : node.outputs()) {
+                if (checkedOutputs.add(output.id()) && graph.hasCycle(output)) {
+                    cyclesFound++;
+                    if (cyclesFound <= 5) {
+                        issues.add("Cyclic recipe chain from: " + output.id());
+                    }
+                }
+            }
+        }
+
         // Report results
         source.sendFeedback(Component.literal("§a[Atlas Debug] Total recipes: " + totalNodes));
         source.sendFeedback(Component.literal("§a[Atlas Debug] Categories used: " + usedCategories.size()));
@@ -119,6 +133,9 @@ public final class AtlasCommands {
         }
         if (missingCategory > 0) {
             source.sendFeedback(Component.literal("§c[Atlas Debug] Recipes with unknown category: " + missingCategory));
+        }
+        if (cyclesFound > 0) {
+            source.sendFeedback(Component.literal("§e[Atlas Debug] Cyclic recipe chains detected: " + cyclesFound));
         }
 
         if (issues.isEmpty()) {
