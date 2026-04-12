@@ -1,10 +1,14 @@
 package dev.atlasmod.fabric;
 
 import dev.atlasmod.api.AtlasApi;
+import dev.atlasmod.core.availability.AvailabilityEngine;
+import dev.atlasmod.core.availability.ContextSnapshot;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.entry.IngredientKey;
+import dev.atlasmod.core.recipe.AcquisitionSource;
 import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.core.recipe.RecipeNode;
+import dev.atlasmod.core.visibility.VisibilityPolicy;
 import dev.atlasmod.search.SearchIndex;
 import dev.atlasmod.search.SearchQuery;
 import dev.atlasmod.ui.DeepModeTab;
@@ -13,13 +17,18 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.CraftingScreen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Util;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.CraftingMenu;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
@@ -83,6 +92,9 @@ public class AtlasScreen extends Screen {
     // In-UI feedback (visible even when full-screen)
     private String feedbackText = null;
     private long feedbackExpireTime = 0;
+
+    // Pending recipe for transfer to crafting grid after closing the screen
+    private static RecipeNode pendingTransferRecipe = null;
 
     public AtlasScreen() {
         super(Component.translatable("screen.atlas.title"));
@@ -357,6 +369,18 @@ public class AtlasScreen extends Screen {
         gfx.text(font, Component.literal(pinLabel), pinX + 4, pinY + 3,
                 pinned ? 0xFFFFCC44 : 0xFFAAAAFF);
 
+        // "Send to Grid" button for crafting recipes (left of save)
+        boolean hasCrafting = selectedRecipes.stream()
+                .anyMatch(r -> r.categoryId().equals("minecraft:crafting"));
+        if (hasCrafting) {
+            String sendLabel = "Send to Grid";
+            int sendW = font.width(sendLabel) + 8;
+            int sendX = pinX - sendW - 4;
+            int sendBg = pendingTransferRecipe != null ? 0x88336655 : 0x66404060;
+            gfx.fill(sendX, pinY, sendX + sendW, pinY + 14, sendBg);
+            gfx.text(font, Component.literal(sendLabel), sendX + 4, pinY + 3, 0xFF88FFAA);
+        }
+
         startY += 24;
 
         // Tab-specific content
@@ -364,8 +388,9 @@ public class AtlasScreen extends Screen {
             case CRAFT -> drawCraftTab(gfx, startX, startY, mouseX, mouseY);
             case USE -> drawUseTab(gfx, startX, startY, mouseX, mouseY);
             case SOURCES -> drawSourcesTab(gfx, startX, startY);
-            default -> gfx.text(font, Component.literal(activeTab.name() + " - Coming soon"),
-                    startX, startY, TEXT_COLOR);
+            case ALTERNATIVES -> drawAlternativesTab(gfx, startX, startY, mouseX, mouseY);
+            case UNLOCKS -> drawUnlocksTab(gfx, startX, startY);
+            case NOTES -> drawNotesTab(gfx, startX, startY);
         }
     }
 
@@ -377,6 +402,9 @@ public class AtlasScreen extends Screen {
             return;
         }
 
+        ContextSnapshot context = ContextSnapshotBuilder.capture();
+        AvailabilityEngine engine = new AvailabilityEngine();
+
         for (RecipeNode recipe : selectedRecipes) {
             if (y > height - 20) break;
 
@@ -385,8 +413,13 @@ public class AtlasScreen extends Screen {
             var outputs = recipe.outputs();
             boolean isCrafting = recipe.categoryId().equals("minecraft:crafting");
 
-            // Category label
-            gfx.text(font, Component.literal(label), x, y, 0xFF8888FF);
+            // Availability badge
+            AvailabilityEngine.AvailabilityResult availability = engine.evaluate(recipe, context);
+            int labelColor = availability.available() ? 0xFF8888FF : 0xFFAA8844;
+            String badge = availability.available() ? "" : " \u26A0";
+
+            // Category label with availability indicator
+            gfx.text(font, Component.literal(label + badge), x, y, labelColor);
             y += 12;
 
             if (isCrafting) {
@@ -470,6 +503,15 @@ public class AtlasScreen extends Screen {
                 gfx.text(font, Component.literal("  Time: " + recipe.processingTime() + " ticks"),
                         x, y, 0xFF888888);
                 y += 10;
+            }
+
+            // Availability blockers shown inline (compact)
+            if (!availability.blockers().isEmpty()) {
+                for (String blocker : availability.blockers()) {
+                    if (y > height - 20) break;
+                    gfx.text(font, Component.literal("  \u26A0 " + blocker), x, y, 0xFFCC8844);
+                    y += 10;
+                }
             }
 
             y += 4;
@@ -589,7 +631,215 @@ public class AtlasScreen extends Screen {
             gfx.text(font, Component.literal("  " + source + " - " + recipe.id()),
                     x, y, 0xFFAAAAFF);
             y += 12;
+
+            // Show acquisition sources if present
+            for (AcquisitionSource src : recipe.sources()) {
+                if (y > height - 20) break;
+                gfx.text(font, Component.literal("    " + src.type().name() + ": " + src.description()),
+                        x, y, 0xFF888888);
+                y += 10;
+            }
         }
+    }
+
+    // ── Alternatives tab ────────────────────────────────────────────────
+
+    private void drawAlternativesTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
+        if (selectedEntry == null) {
+            gfx.text(font, Component.literal("Select an item to see alternatives"), x, y, TEXT_COLOR);
+            return;
+        }
+
+        gfx.text(font, Component.literal("Tag-based alternatives for inputs:"), x, y, 0xFF8888FF);
+        y += 14;
+
+        // Collect all tag-based ingredients from recipes that produce this item
+        boolean foundAny = false;
+        for (RecipeNode recipe : selectedRecipes) {
+            for (IngredientKey input : recipe.inputs()) {
+                if (!input.tagBased() || input.isEmpty()) continue;
+
+                foundAny = true;
+                gfx.text(font, Component.literal("Tag: #" + input.id()), x, y, 0xFFAAAAFF);
+                y += 12;
+
+                // Resolve all items in this tag
+                List<ItemStack> tagItems = resolveTag(input.id());
+                if (tagItems.isEmpty()) {
+                    gfx.text(font, Component.literal("  (no items found)"), x + 8, y, 0xFF666666);
+                    y += 10;
+                } else {
+                    int itemX = x + 8;
+                    for (ItemStack tagStack : tagItems) {
+                        if (itemX + GRID_SLOT > width - 10) {
+                            itemX = x + 8;
+                            y += GRID_SLOT + 2;
+                        }
+                        if (y > height - 30) break;
+
+                        gfx.item(tagStack, itemX, y);
+                        EntryKey entry = stackToEntry(tagStack);
+                        if (entry != null) {
+                            recipeHitBoxes.add(new ItemHitBox(itemX, y, GRID_SLOT, GRID_SLOT, entry, tagStack));
+                        }
+                        itemX += GRID_SLOT;
+                    }
+                    y += GRID_SLOT + 4;
+                }
+
+                if (y > height - 30) break;
+            }
+            if (y > height - 30) break;
+        }
+
+        if (!foundAny) {
+            gfx.text(font, Component.literal("No tag-based alternatives in these recipes."), x, y, 0xFF888888);
+            y += 12;
+            gfx.text(font, Component.literal("All ingredients use exact item matches."), x, y, 0xFF666666);
+        }
+
+        // Tooltip on hover
+        for (var hitBox : recipeHitBoxes) {
+            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
+                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
+                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
+                break;
+            }
+        }
+    }
+
+    private static List<ItemStack> resolveTag(String tagId) {
+        List<ItemStack> items = new ArrayList<>();
+        try {
+            Identifier loc = Identifier.parse(tagId);
+            TagKey<Item> tagKey = TagKey.create(BuiltInRegistries.ITEM.key(), loc);
+            for (Holder<Item> holder : BuiltInRegistries.ITEM.getTagOrEmpty(tagKey)) {
+                items.add(new ItemStack(holder.value()));
+                if (items.size() >= 36) break; // cap to avoid rendering explosion
+            }
+        } catch (Exception ignored) {
+        }
+        return items;
+    }
+
+    // ── Unlocks tab ─────────────────────────────────────────────────────
+
+    private void drawUnlocksTab(GuiGraphicsExtractor gfx, int x, int y) {
+        if (selectedRecipes.isEmpty()) {
+            gfx.text(font, Component.literal("No recipes to evaluate"), x, y, TEXT_COLOR);
+            return;
+        }
+
+        ContextSnapshot context = ContextSnapshotBuilder.capture();
+        AvailabilityEngine engine = new AvailabilityEngine();
+
+        gfx.text(font, Component.literal("Availability for " + selectedEntry.path() + ":"), x, y, 0xFF8888FF);
+        y += 14;
+
+        for (RecipeNode recipe : selectedRecipes) {
+            if (y > height - 30) break;
+
+            String label = categoryLabel(recipe.categoryId());
+            AvailabilityEngine.AvailabilityResult result = engine.evaluate(recipe, context);
+
+            // Status icon and color
+            int statusColor;
+            String statusIcon;
+            if (result.available()) {
+                statusColor = 0xFF44CC44;
+                statusIcon = "\u2714"; // checkmark
+            } else {
+                statusColor = switch (result.policy()) {
+                    case HIDDEN -> 0xFFCC4444;
+                    case TEASER -> 0xFFCC8844;
+                    case GREYED_OUT -> 0xFFAAAA44;
+                    default -> 0xFF888888;
+                };
+                statusIcon = switch (result.policy()) {
+                    case HIDDEN -> "\u2716"; // X mark
+                    case TEASER -> "\uD83D\uDD12"; // lock (fallback to text)
+                    default -> "\u26A0"; // warning
+                };
+            }
+
+            gfx.text(font, Component.literal(statusIcon + " " + label + " - " + recipe.id()),
+                    x, y, statusColor);
+            y += 12;
+
+            if (!result.blockers().isEmpty()) {
+                for (String blocker : result.blockers()) {
+                    if (y > height - 20) break;
+                    gfx.text(font, Component.literal("  " + blocker), x + 8, y, 0xFFCC8844);
+                    y += 10;
+                }
+            } else if (result.available()) {
+                gfx.text(font, Component.literal("  All conditions met"), x + 8, y, 0xFF44CC44);
+                y += 10;
+            }
+
+            y += 4;
+        }
+
+        // Context info at the bottom
+        if (y < height - 50) {
+            y += 6;
+            gfx.text(font, Component.literal("Current context:"), x, y, 0xFF666688);
+            y += 11;
+            gfx.text(font, Component.literal("  Dim: " + context.dimensionId()), x, y, 0xFF555555);
+            y += 10;
+            gfx.text(font, Component.literal("  Biome: " + context.biomeId()), x, y, 0xFF555555);
+            y += 10;
+            gfx.text(font, Component.literal("  Inventory items: " + context.inventoryItemIds().size()), x, y, 0xFF555555);
+            y += 10;
+            gfx.text(font, Component.literal("  Nearby blocks: " + context.nearbyBlockIds().size()), x, y, 0xFF555555);
+        }
+    }
+
+    // ── Notes tab ───────────────────────────────────────────────────────
+
+    private void drawNotesTab(GuiGraphicsExtractor gfx, int x, int y) {
+        if (selectedEntry == null) {
+            gfx.text(font, Component.literal("Select an item to see notes"), x, y, TEXT_COLOR);
+            return;
+        }
+
+        gfx.text(font, Component.literal("Notes for " + selectedEntry.path()), x, y, 0xFF8888FF);
+        y += 16;
+
+        // Info pages are loaded from datapacks (data/<ns>/atlas/info_pages/).
+        // Until the datapack loader is wired, show a placeholder with useful
+        // static information about the selected item.
+        gfx.text(font, Component.literal("Item ID: " + selectedEntry.id()), x, y, 0xFF888888);
+        y += 12;
+        gfx.text(font, Component.literal("Type: " + selectedEntry.type()), x, y, 0xFF888888);
+        y += 12;
+        gfx.text(font, Component.literal("Namespace: " + selectedEntry.namespace()), x, y, 0xFF888888);
+        y += 16;
+
+        // Show tags for this item
+        ItemStack stack = entryToStack(selectedEntry);
+        if (!stack.isEmpty()) {
+            gfx.text(font, Component.literal("Tags:"), x, y, 0xFFAAAAFF);
+            y += 12;
+            var tags = stack.typeHolder().tags().toList();
+            if (tags.isEmpty()) {
+                gfx.text(font, Component.literal("  (none)"), x, y, 0xFF666666);
+                y += 10;
+            } else {
+                for (var tag : tags) {
+                    if (y > height - 20) break;
+                    gfx.text(font, Component.literal("  #" + tag.location()), x, y, 0xFF888888);
+                    y += 10;
+                }
+            }
+        }
+
+        y += 10;
+        gfx.text(font, Component.literal("Custom info pages via datapacks"), x, y, 0xFF555555);
+        y += 10;
+        gfx.text(font, Component.literal("will be loaded from:"), x, y, 0xFF555555);
+        y += 10;
+        gfx.text(font, Component.literal("data/<ns>/atlas/info_pages/"), x, y, 0xFF666688);
     }
 
     // ── Filter + Help ──────────────────────────────────────────────────
@@ -624,8 +874,13 @@ public class AtlasScreen extends Screen {
         gfx.text(font, Component.literal("Atlas Deep Mode"), x, y, HEADER_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Browse items on the left, click to select."), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("Recipes and details appear on the right."), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Tabs: Craft (how to make), Use (used in),"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Sources (all ways to obtain)."), x, y, TEXT_COLOR); y += lineH + 2;
+        gfx.text(font, Component.literal("Tabs:"), x, y, 0xFF8888FF); y += lineH;
+        gfx.text(font, Component.literal("  Craft - recipes to make the item"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  Use - recipes that use the item"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  Sources - all ways to obtain"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  Alternatives - tag-based substitutes"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  Unlocks - availability & blockers"), x, y, TEXT_COLOR); y += lineH;
+        gfx.text(font, Component.literal("  Notes - item info & tags"), x, y, TEXT_COLOR); y += lineH + 2;
         gfx.text(font, Component.literal("Search prefixes:"), x, y, 0xFF8888FF); y += lineH;
         gfx.text(font, Component.literal("  @mod    - show items from a specific mod"), x, y, TEXT_COLOR); y += lineH;
         gfx.text(font, Component.literal("  $tag    - filter by item tag"), x, y, TEXT_COLOR); y += lineH;
@@ -658,6 +913,25 @@ public class AtlasScreen extends Screen {
                     pm.pin(selectedEntry, 1);
                 }
                 return true;
+            }
+
+            // "Send to Grid" button click (left of save button)
+            boolean hasCrafting = selectedRecipes.stream()
+                    .anyMatch(r -> r.categoryId().equals("minecraft:crafting"));
+            if (hasCrafting) {
+                String sendLabel = "Send to Grid";
+                int sendW = font.width(sendLabel) + 8;
+                int sendX = pinX - sendW - 4;
+                if (mouseX >= sendX && mouseX < sendX + sendW
+                        && mouseY >= pinHeaderY && mouseY < pinHeaderY + 14) {
+                    pendingTransferRecipe = selectedRecipes.stream()
+                            .filter(r -> r.categoryId().equals("minecraft:crafting"))
+                            .findFirst().orElse(null);
+                    if (pendingTransferRecipe != null) {
+                        showFeedback("Recipe queued. Open a crafting table to paste.");
+                    }
+                    return true;
+                }
             }
         }
 
@@ -730,6 +1004,20 @@ public class AtlasScreen extends Screen {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    /**
+     * Returns and clears a pending recipe stored for transfer into a crafting grid.
+     * Called by QuickModeOverlay when the player opens a CraftingScreen.
+     */
+    public static RecipeNode consumePendingTransfer() {
+        RecipeNode r = pendingTransferRecipe;
+        pendingTransferRecipe = null;
+        return r;
+    }
+
+    public static boolean hasPendingTransfer() {
+        return pendingTransferRecipe != null;
     }
 
     @Override

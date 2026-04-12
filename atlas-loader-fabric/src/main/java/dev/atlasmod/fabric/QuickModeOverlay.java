@@ -202,6 +202,22 @@ public final class QuickModeOverlay {
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (!(screen instanceof AbstractContainerScreen<?>)) return;
 
+            // Auto-paste a recipe from Deep Mode's "Send to Grid" button
+            if (screen instanceof CraftingScreen craftingScreen && AtlasScreen.hasPendingTransfer()) {
+                RecipeNode pending = AtlasScreen.consumePendingTransfer();
+                if (pending != null) {
+                    // Defer one tick so the screen is fully initialized
+                    client.schedule(() -> {
+                        pasteRecipeIntoCraftingGrid(craftingScreen);
+                        showFeedback("Recipe pasted from Atlas");
+                    });
+                    // Set the recipe as selected so the overlay shows it
+                    selectedEntry = pending.outputs().isEmpty() ? null
+                            : new EntryKey("item", pending.outputs().getFirst().id());
+                    selectedRecipes = List.of(pending);
+                }
+            }
+
             // Hook into the screen's render cycle to draw our overlay
             ScreenEvents.afterExtract(screen).register((scr, graphics, mouseX, mouseY, tickDelta) -> {
                 if (!enabled) return;
