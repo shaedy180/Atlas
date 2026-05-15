@@ -1,11 +1,8 @@
 package dev.atlasmod.fabric;
 
-import dev.atlasmod.api.AtlasApi;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.recipe.RecipeNode;
-import dev.atlasmod.search.SearchIndex;
-import dev.atlasmod.search.SearchQuery;
 import dev.atlasmod.ui.PinnedPlanManager;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
@@ -153,25 +150,12 @@ public final class QuickModeOverlay {
         filterLabels.add("Vanilla");
         filterOptions.add("Saved");
         filterLabels.add("Saved");
-        // Detect mod namespaces from recipe graph
-        var graph = AtlasFabricClient.recipeGraph();
-        if (graph != null) {
-            TreeSet<String> mods = new TreeSet<>();
-            for (var node : graph.allNodes()) {
-                String id = node.id();
-                int colon = id.indexOf(':');
-                if (colon > 0) {
-                    String ns = id.substring(0, colon);
-                    if (!"minecraft".equals(ns)) {
-                        mods.add(ns);
-                    }
-                }
-            }
-            for (String mod : mods) {
-                filterOptions.add("@" + mod);
-                // Capitalize mod name
-                filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
-            }
+        TreeSet<String> mods = new TreeSet<>(AtlasRuntimeController.clientSnapshot().ownerModIds());
+        mods.remove("minecraft");
+        mods.remove(AtlasFabricClient.MOD_ID);
+        for (String mod : mods) {
+            filterOptions.add("@" + mod);
+            filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
         }
         // Reset active filter if out of bounds
         if (activeFilter >= filterLabels.size()) {
@@ -242,13 +226,10 @@ public final class QuickModeOverlay {
     }
 
     private static void refreshSearch() {
-        SearchIndex index = AtlasFabricClient.searchIndex();
-        if (index == null) {
-            results = List.of();
-            return;
-        }
-        SearchQuery query = SearchQuery.parse(searchText);
-        results = index.search(query);
+        boolean savedOnly = activeFilter >= 0
+                && activeFilter < filterOptions.size()
+                && "Saved".equals(filterOptions.get(activeFilter));
+        results = AtlasClientSearch.search(searchText, savedOnly);
         scrollOffset = 0;
     }
 
@@ -393,7 +374,7 @@ public final class QuickModeOverlay {
                 if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
                         && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
                     selectedEntry = hitBox.entry;
-                    selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                    selectedRecipes = AtlasFabricClient.recipeGraph().recipesFor(selectedEntry);
                     LOGGER.info("[Atlas] Recipe click-through: {}", selectedEntry.id());
                     return true;
                 }
@@ -409,7 +390,7 @@ public final class QuickModeOverlay {
 
             if (col >= 0 && col < columns && idx >= 0 && idx < results.size()) {
                 selectedEntry = results.get(idx);
-                selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                selectedRecipes = AtlasFabricClient.recipeGraph().recipesFor(selectedEntry);
 
                 // Creative mode: give item to player
                 giveItemIfCreative(selectedEntry, event);
@@ -427,30 +408,13 @@ public final class QuickModeOverlay {
             // Strip any existing @filter and refresh with saved items
             String clean = searchText.replaceAll("@\\S+\\s*", "").trim();
             searchText = clean;
-            refreshSearchWithSavedFilter();
+            refreshSearch();
             return;
         }
         String filterPrefix = activeFilter > 0 ? filterValue + " " : "";
         // Strip any existing @filter from searchText
         String clean = searchText.replaceAll("@\\S+\\s*", "").trim();
         setSearchText(filterPrefix + clean);
-    }
-
-    private static void refreshSearchWithSavedFilter() {
-        SearchIndex index = AtlasFabricClient.searchIndex();
-        if (index == null) {
-            results = List.of();
-            return;
-        }
-        PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
-        var savedTargets = new java.util.HashSet<EntryKey>();
-        for (var plan : pm.plans()) {
-            savedTargets.add(plan.target());
-        }
-        SearchQuery query = SearchQuery.parse(searchText);
-        var allResults = index.search(query);
-        results = allResults.stream().filter(savedTargets::contains).toList();
-        scrollOffset = 0;
     }
 
     /**
@@ -819,20 +783,12 @@ public final class QuickModeOverlay {
      * Maps a category ID to a short human-readable label.
      */
     private static String categoryLabel(String categoryId) {
-        return switch (categoryId) {
-            case "minecraft:crafting"     -> "Crafting";
-            case "minecraft:smelting"     -> "Smelting";
-            case "minecraft:blasting"     -> "Blasting";
-            case "minecraft:smoking"      -> "Smoking";
-            case "minecraft:campfire"     -> "Campfire";
-            case "minecraft:stonecutting" -> "Stonecutting";
-            case "minecraft:smithing"     -> "Smithing";
-            default -> {
-                // Strip namespace, capitalize
-                String raw = categoryId.contains(":") ? categoryId.substring(categoryId.indexOf(':') + 1) : categoryId;
-                yield raw.substring(0, 1).toUpperCase() + raw.substring(1).replace('_', ' ');
-            }
-        };
+        return AtlasCategoryHelper.labelFor(categoryId);
+    }
+
+    public static void onAtlasDataUpdated() {
+        rebuildFilters();
+        refreshSearch();
     }
 
     // ── Creative Mode ─────────────────────────────────────────────────

@@ -1,5 +1,7 @@
 package dev.atlasmod.fabric;
 
+import dev.atlasmod.api.internal.AtlasMutableRegistry;
+import dev.atlasmod.api.internal.AtlasRegistrationContextImpl;
 import dev.atlasmod.api.plugin.AtlasPlugin;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.entrypoint.EntrypointContainer;
@@ -27,7 +29,7 @@ public final class AtlasPluginLoader {
      * Discovers all mods providing an "atlas" entrypoint and calls onAtlasReady() on each.
      * Returns the number of plugins successfully invoked.
      */
-    public static int loadAll() {
+    public static int registerAll(AtlasMutableRegistry registry) {
         List<EntrypointContainer<AtlasPlugin>> containers =
                 FabricLoader.getInstance().getEntrypointContainers(ENTRYPOINT_KEY, AtlasPlugin.class);
 
@@ -41,17 +43,17 @@ public final class AtlasPluginLoader {
             String modId = container.getProvider().getMetadata().getId();
             try {
                 AtlasPlugin plugin = container.getEntrypoint();
-                plugin.onAtlasReady();
+                plugin.register(new AtlasRegistrationContextImpl(modId, registry));
                 loaded++;
-                LOGGER.info("[Atlas] Loaded plugin from mod '{}'", modId);
+                LOGGER.info("[Atlas] Registered plugin from mod '{}'", modId);
             } catch (Throwable t) {
                 // Catch everything including LinkageError so one broken plugin
                 // does not take down the rest of the mod
-                LOGGER.error("[Atlas] Plugin from mod '{}' threw during onAtlasReady(), skipping", modId, t);
+                LOGGER.error("[Atlas] Plugin from mod '{}' threw during register(), skipping", modId, t);
             }
         }
 
-        LOGGER.info("[Atlas] {} of {} third-party plugins loaded", loaded, containers.size());
+        LOGGER.info("[Atlas] {} of {} third-party plugins registered", loaded, containers.size());
         return loaded;
     }
 }

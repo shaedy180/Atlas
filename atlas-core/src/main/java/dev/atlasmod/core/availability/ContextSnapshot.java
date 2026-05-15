@@ -13,7 +13,8 @@ public record ContextSnapshot(
         String biomeId,
         Set<String> advancements,
         Set<String> inventoryItemIds,
-        Set<String> nearbyBlockIds
+        Set<String> nearbyBlockIds,
+        boolean progressionSynchronized
 ) {
     public ContextSnapshot {
         Objects.requireNonNull(dimensionId);
@@ -27,6 +28,6 @@ public record ContextSnapshot(
      * Returns a minimal empty snapshot for when no player context is available.
      */
     public static ContextSnapshot empty() {
-        return new ContextSnapshot("", "", Set.of(), Set.of(), Set.of());
+        return new ContextSnapshot("", "", Set.of(), Set.of(), Set.of(), false);
     }
 }

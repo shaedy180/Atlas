@@ -1,6 +1,9 @@
 package dev.atlasmod.fabric;
 
 import dev.atlasmod.core.entry.EntryKey;
+import dev.atlasmod.core.recipe.AcquisitionSource;
+import dev.atlasmod.core.recipe.RecipeNode;
+import dev.atlasmod.core.registry.AtlasRegistrySnapshot;
 import dev.atlasmod.search.SearchIndex;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.Holder;
@@ -13,7 +16,11 @@ import net.minecraft.world.item.ItemStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -31,8 +38,37 @@ public final class AtlasItemIndexer {
      * Uses translated display names for search matching instead of raw
      * translation keys, so that players can search by the name they see.
      */
-    public static void buildIndex(SearchIndex index) {
+    public static void buildIndex(SearchIndex index, AtlasRegistrySnapshot snapshot) {
         index.clear();
+
+        Map<EntryKey, Set<String>> sourceTypesByEntry = new HashMap<>();
+        Map<EntryKey, Set<String>> stationsByEntry = new HashMap<>();
+        Map<EntryKey, List<String>> aliasesByEntry = new HashMap<>();
+        Set<EntryKey> renewableEntries = new HashSet<>();
+
+        for (RecipeNode recipe : snapshot.recipes()) {
+            String sourceType = sourceTypeForRecipe(recipe.categoryId());
+            for (EntryKey output : recipe.outputs()) {
+                if (sourceType != null) {
+                    sourceTypesByEntry.computeIfAbsent(output, ignored -> new HashSet<>()).add(sourceType);
+                }
+                recipe.station().ifPresent(station ->
+                        stationsByEntry.computeIfAbsent(output, ignored -> new HashSet<>()).add(station.id()));
+                if (!recipe.searchAliases().isEmpty()) {
+                    aliasesByEntry.computeIfAbsent(output, ignored -> new ArrayList<>()).addAll(recipe.searchAliases());
+                }
+            }
+        }
+
+        snapshot.sourcesByEntry().forEach((entry, sources) -> {
+            for (AcquisitionSource source : sources) {
+                sourceTypesByEntry.computeIfAbsent(entry, ignored -> new HashSet<>())
+                        .add(source.type().name().toLowerCase());
+                if (source.renewable()) {
+                    renewableEntries.add(entry);
+                }
+            }
+        });
 
         int count = 0;
         for (var entry : BuiltInRegistries.ITEM.entrySet()) {
@@ -56,7 +92,7 @@ public final class AtlasItemIndexer {
             String idStr = id.toString();
             String pathPart = idStr.contains(":") ? idStr.substring(idStr.indexOf(':') + 1) : idStr;
             String pathAlias = pathPart.replace('_', ' ');
-            String searchableName = displayName + " " + pathAlias;
+            StringBuilder searchableName = new StringBuilder(displayName).append(' ').append(pathAlias);
 
             // Collect tags for this item
             Set<String> tags = new HashSet<>();
@@ -84,10 +120,36 @@ public final class AtlasItemIndexer {
                 // Tooltip extraction can fail for items with unusual tooltip logic
             }
 
-            index.add(key, searchableName, tags, tooltip);
+            List<String> extraAliases = aliasesByEntry.getOrDefault(key, List.of());
+            for (String alias : extraAliases) {
+                searchableName.append(' ').append(alias);
+            }
+
+            index.add(
+                    key,
+                    searchableName.toString(),
+                    tags,
+                    tooltip,
+                    sourceTypesByEntry.getOrDefault(key, Set.of()),
+                    stationsByEntry.getOrDefault(key, Set.of()),
+                    renewableEntries.contains(key)
+            );
             count++;
         }
 
         LOGGER.info("[Atlas] Indexed {} items from registry", count);
+    }
+
+    private static String sourceTypeForRecipe(String categoryId) {
+        return switch (categoryId) {
+            case "minecraft:crafting" -> "crafting";
+            case "minecraft:smelting" -> "smelting";
+            case "minecraft:blasting" -> "blasting";
+            case "minecraft:smoking" -> "smoking";
+            case "minecraft:campfire" -> "campfire";
+            case "minecraft:stonecutting" -> "stonecutting";
+            case "minecraft:smithing" -> "smithing";
+            default -> null;
+        };
     }
 }

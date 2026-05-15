@@ -15,8 +15,11 @@
   },
   "license": "LGPL-3.0-or-later",
   "icon": "assets/atlas/icon.png",
-  "environment": "client",
+  "environment": "*",
   "entrypoints": {
+    "main": [
+      "dev.atlasmod.fabric.AtlasFabric"
+    ],
     "client": [
       "dev.atlasmod.fabric.AtlasFabricClient"
     ]

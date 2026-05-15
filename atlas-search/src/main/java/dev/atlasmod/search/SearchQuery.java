@@ -32,7 +32,6 @@ public record SearchQuery(
     public static SearchQuery parse(String raw) {
         Objects.requireNonNull(raw, "raw must not be null");
 
-        String text = raw;
         String mod = null, tooltip = null, tag = null, source = null, station = null;
         boolean unlocked = false, hidden = false, renewable = false;
 

@@ -1,19 +1,27 @@
 package dev.atlasmod.fabric;
 
-import dev.atlasmod.api.AtlasApi;
+import dev.atlasmod.api.AtlasRegistrationContext;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.entry.StationKey;
 import dev.atlasmod.core.recipe.RecipeNode;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.crafting.*;
-import net.minecraft.world.item.crafting.display.*;
+import net.minecraft.world.item.crafting.Recipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.display.FurnaceRecipeDisplay;
+import net.minecraft.world.item.crafting.display.RecipeDisplay;
+import net.minecraft.world.item.crafting.display.ShapedCraftingRecipeDisplay;
+import net.minecraft.world.item.crafting.display.ShapelessCraftingRecipeDisplay;
+import net.minecraft.world.item.crafting.display.SlotDisplay;
+import net.minecraft.world.item.crafting.display.SmithingRecipeDisplay;
+import net.minecraft.world.item.crafting.display.StonecutterRecipeDisplay;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,113 +30,87 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * Registers vanilla recipe categories and loads recipes from the server's
- * RecipeManager into the Atlas graph. Category registration happens at
- * mod init; recipe loading happens on world join when the integrated server
- * (or recipe data) is available.
+ * Registers vanilla Atlas categories and converts server recipes into RecipeNodes.
  */
 public final class VanillaRecipeLoader {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(VanillaRecipeLoader.class);
 
-    private VanillaRecipeLoader() {}
-
-    // ── Category registration (called once at mod init) ──────────────────
-
-    public static void registerCategories() {
-        AtlasApi.category("minecraft:crafting")
-                .name("Crafting").icon("minecraft:crafting_table").order(0).register();
-        AtlasApi.category("minecraft:smelting")
-                .name("Smelting").icon("minecraft:furnace").order(10).register();
-        AtlasApi.category("minecraft:blasting")
-                .name("Blasting").icon("minecraft:blast_furnace").order(11).register();
-        AtlasApi.category("minecraft:smoking")
-                .name("Smoking").icon("minecraft:smoker").order(12).register();
-        AtlasApi.category("minecraft:stonecutting")
-                .name("Stonecutting").icon("minecraft:stonecutter").order(20).register();
-        AtlasApi.category("minecraft:smithing")
-                .name("Smithing").icon("minecraft:smithing_table").order(30).register();
-        AtlasApi.category("minecraft:brewing")
-                .name("Brewing").icon("minecraft:brewing_stand").order(40).register();
-        AtlasApi.category("minecraft:campfire")
-                .name("Campfire Cooking").icon("minecraft:campfire").order(50).register();
-        AtlasApi.category("atlas:mob_drops")
-                .name("Mob Drops").icon("minecraft:iron_sword").order(60).register();
-        AtlasApi.category("atlas:block_drops")
-                .name("Block Drops").icon("minecraft:iron_pickaxe").order(61).register();
-        AtlasApi.category("atlas:villager_trades")
-                .name("Villager Trades").icon("minecraft:emerald").order(70).register();
-        AtlasApi.category("atlas:loot_tables")
-                .name("Loot Tables").icon("minecraft:chest").order(80).register();
-        AtlasApi.category("atlas:worldgen")
-                .name("World Generation").icon("minecraft:grass_block").order(90).register();
-        AtlasApi.category("atlas:fishing")
-                .name("Fishing").icon("minecraft:fishing_rod").order(100).register();
-        AtlasApi.category("atlas:composting")
-                .name("Composting").icon("minecraft:composter").order(110).register();
-        AtlasApi.category("atlas:fuel")
-                .name("Fuel").icon("minecraft:coal").order(120).register();
-
-        LOGGER.info("[Atlas] Registered 16 vanilla categories");
+    private VanillaRecipeLoader() {
     }
 
-    // ── Recipe loading (called on world join) ────────────────────────────
+    public static void registerCategories(AtlasRegistrationContext context) {
+        context.categories().add("minecraft:crafting")
+                .name("Crafting").icon("minecraft:crafting_table").order(0).register();
+        context.categories().add("minecraft:smelting")
+                .name("Smelting").icon("minecraft:furnace").order(10).register();
+        context.categories().add("minecraft:blasting")
+                .name("Blasting").icon("minecraft:blast_furnace").order(11).register();
+        context.categories().add("minecraft:smoking")
+                .name("Smoking").icon("minecraft:smoker").order(12).register();
+        context.categories().add("minecraft:stonecutting")
+                .name("Stonecutting").icon("minecraft:stonecutter").order(20).register();
+        context.categories().add("minecraft:smithing")
+                .name("Smithing").icon("minecraft:smithing_table").order(30).register();
+        context.categories().add("minecraft:brewing")
+                .name("Brewing").icon("minecraft:brewing_stand").order(40).register();
+        context.categories().add("minecraft:campfire")
+                .name("Campfire Cooking").icon("minecraft:campfire").order(50).register();
+        context.categories().add("atlas:mob_drops")
+                .name("Mob Drops").icon("minecraft:iron_sword").order(60).register();
+        context.categories().add("atlas:block_drops")
+                .name("Block Drops").icon("minecraft:iron_pickaxe").order(61).register();
+        context.categories().add("atlas:villager_trades")
+                .name("Villager Trades").icon("minecraft:emerald").order(70).register();
+        context.categories().add("atlas:loot_tables")
+                .name("Loot Tables").icon("minecraft:chest").order(80).register();
+        context.categories().add("atlas:worldgen")
+                .name("World Generation").icon("minecraft:grass_block").order(90).register();
+        context.categories().add("atlas:fishing")
+                .name("Fishing").icon("minecraft:fishing_rod").order(100).register();
+        context.categories().add("atlas:composting")
+                .name("Composting").icon("minecraft:composter").order(110).register();
+        context.categories().add("atlas:fuel")
+                .name("Fuel").icon("minecraft:coal").order(120).register();
+    }
 
-    /**
-     * Loads all recipes from the integrated server's RecipeManager into
-     * the Atlas graph. Returns the number of recipes successfully loaded.
-     */
-    public static int loadRecipes() {
-        Minecraft mc = Minecraft.getInstance();
-        MinecraftServer server = mc.getSingleplayerServer();
-        if (server == null) {
-            LOGGER.warn("[Atlas] No integrated server available - recipe loading skipped");
-            return 0;
-        }
-
+    public static List<RecipeNode> loadRecipes(MinecraftServer server) {
         RecipeManager recipeManager = server.getRecipeManager();
         Collection<RecipeHolder<?>> allRecipes = recipeManager.getRecipes();
 
-        // Clear previous data so reloads are idempotent
-        AtlasApi.get().recipeGraph().clear();
-
-        int loaded = 0;
+        List<RecipeNode> result = new ArrayList<>();
         int skipped = 0;
 
         for (RecipeHolder<?> holder : allRecipes) {
             try {
                 List<RecipeNode> nodes = convertRecipe(holder);
-                for (RecipeNode node : nodes) {
-                    AtlasApi.get().recipeGraph().addNode(node);
-                    loaded++;
+                result.addAll(nodes);
+                if (nodes.isEmpty()) {
+                    skipped++;
                 }
-                if (nodes.isEmpty()) skipped++;
             } catch (Exception e) {
                 skipped++;
-                LOGGER.debug("[Atlas] Skipped recipe '{}': {}",
-                        holder.id().identifier(), e.getMessage());
+                LOGGER.debug("[Atlas] Skipped recipe '{}': {}", holder.id().identifier(), e.getMessage());
             }
         }
 
-        LOGGER.info("[Atlas] Loaded {} recipes ({} skipped)", loaded, skipped);
-        return loaded;
+        LOGGER.info("[Atlas] Converted {} recipes ({} skipped)", result.size(), skipped);
+        return result;
     }
 
-    // ── Conversion: RecipeHolder -> RecipeNode (via RecipeDisplay) ───────
-
-    /**
-     * Converts a single RecipeHolder into one or more RecipeNodes.
-     * Uses the display() system to extract inputs and outputs portably
-     * (works for vanilla and modded recipe types that implement display()).
-     */
     private static List<RecipeNode> convertRecipe(RecipeHolder<?> holder) {
         Recipe<?> recipe = holder.value();
         String categoryId = mapRecipeType(recipe);
-        if (categoryId == null) return List.of();
+        if (categoryId == null) {
+            return List.of();
+        }
 
         List<RecipeDisplay> displays = recipe.display();
-        if (displays == null || displays.isEmpty()) return List.of();
+        if (displays == null || displays.isEmpty()) {
+            return List.of();
+        }
 
+        String ownerModId = holder.id().identifier().getNamespace();
         String baseId = holder.id().identifier().toString();
         List<RecipeNode> results = new ArrayList<>();
 
@@ -138,22 +120,24 @@ public final class VanillaRecipeLoader {
 
             List<IngredientKey> inputs = extractInputs(display);
             List<EntryKey> outputs = extractOutputs(display);
-            // Skip recipes where we couldn't resolve any output
-            if (outputs.isEmpty()) continue;
+            if (outputs.isEmpty()) {
+                continue;
+            }
 
-            RecipeNode.Builder builder = RecipeNode.builder(nodeId, categoryId)
+            RecipeNode.Builder builder = RecipeNode.builder(nodeId, ownerModId, categoryId)
                     .inputs(inputs)
-                    .outputs(outputs);
+                    .outputs(outputs)
+                    .searchAliases(List.of(baseId.replace(':', ' '), holder.id().identifier().getPath().replace('_', ' ')));
 
             StationKey station = stationForCategory(categoryId);
-            if (station != null) builder.station(station);
+            if (station != null) {
+                builder.station(station);
+            }
 
-            // Shaped crafting carries grid dimensions
             if (display instanceof ShapedCraftingRecipeDisplay shaped) {
                 builder.grid(shaped.width(), shaped.height());
             }
 
-            // Furnace displays carry duration and experience
             if (display instanceof FurnaceRecipeDisplay furnace) {
                 builder.processingTime(furnace.duration());
             }
@@ -164,15 +148,10 @@ public final class VanillaRecipeLoader {
         return results;
     }
 
-    /**
-     * Extract ingredient keys from a RecipeDisplay.
-     * Each display type exposes ingredients differently.
-     */
     private static List<IngredientKey> extractInputs(RecipeDisplay display) {
         List<IngredientKey> inputs = new ArrayList<>();
 
         if (display instanceof ShapedCraftingRecipeDisplay shaped) {
-            // Preserve empty slots so grid positions stay correct
             for (SlotDisplay slot : shaped.ingredients()) {
                 if (slot instanceof SlotDisplay.Empty) {
                     inputs.add(IngredientKey.EMPTY);
@@ -197,90 +176,72 @@ public final class VanillaRecipeLoader {
         return inputs;
     }
 
-    /**
-     * Converts a SlotDisplay into IngredientKey entries.
-     * Handles item, itemstack, tag, composite, and remainder displays.
-     * For composite (alternative) slots, picks the first resolvable child
-     * as the representative ingredient.
-     */
     private static void addSlotAsIngredient(SlotDisplay slot, List<IngredientKey> out) {
         if (slot instanceof SlotDisplay.ItemSlotDisplay item) {
             Identifier id = BuiltInRegistries.ITEM.getKey(item.item().value());
-            if (id != null) out.add(IngredientKey.item(id.toString()));
-
+            if (id != null) {
+                out.add(IngredientKey.item(id.toString()));
+            }
         } else if (slot instanceof SlotDisplay.ItemStackSlotDisplay stack) {
             Identifier id = BuiltInRegistries.ITEM.getKey(stack.stack().item().value());
-            if (id != null) out.add(IngredientKey.item(id.toString()));
-
+            if (id != null) {
+                out.add(IngredientKey.item(id.toString()));
+            }
         } else if (slot instanceof SlotDisplay.TagSlotDisplay tag) {
             TagKey<Item> tagKey = tag.tag();
             out.add(IngredientKey.tag(tagKey.location().toString()));
-
         } else if (slot instanceof SlotDisplay.Composite composite) {
-            // Composite wraps alternatives (e.g. any plank type for a crafting slot).
-            // Recurse into the first child that yields a concrete ingredient.
             List<SlotDisplay> children = composite.contents();
             if (!children.isEmpty()) {
                 addSlotAsIngredient(children.getFirst(), out);
             }
-
         } else if (slot instanceof SlotDisplay.WithRemainder remainder) {
-            // WithRemainder wraps an inner slot plus a leftover (e.g. milk bucket -> bucket).
             addSlotAsIngredient(remainder.input(), out);
         }
-        // SlotDisplay.Empty, AnyFuel, and unknown types are silently skipped
     }
 
-    /**
-     * Extract output EntryKeys from a RecipeDisplay.
-     * All RecipeDisplay types expose result() returning a SlotDisplay.
-     */
     private static List<EntryKey> extractOutputs(RecipeDisplay display) {
         List<EntryKey> outputs = new ArrayList<>();
-        SlotDisplay result = display.result();
-        addSlotAsOutput(result, outputs);
+        addSlotAsOutput(display.result(), outputs);
         return outputs;
     }
 
-    /**
-     * Converts a result SlotDisplay into EntryKey entries.
-     */
     private static void addSlotAsOutput(SlotDisplay slot, List<EntryKey> out) {
         if (slot instanceof SlotDisplay.ItemSlotDisplay item) {
             Identifier id = BuiltInRegistries.ITEM.getKey(item.item().value());
-            if (id != null) out.add(new EntryKey("item", id.toString()));
-
+            if (id != null) {
+                out.add(new EntryKey("item", id.toString()));
+            }
         } else if (slot instanceof SlotDisplay.ItemStackSlotDisplay stack) {
             Identifier id = BuiltInRegistries.ITEM.getKey(stack.stack().item().value());
-            if (id != null) out.add(new EntryKey("item", id.toString()));
+            if (id != null) {
+                out.add(new EntryKey("item", id.toString()));
+            }
         }
-        // Tag and composite outputs are rare; skip for now
     }
-
-    // ── Mapping helpers ──────────────────────────────────────────────────
 
     private static String mapRecipeType(Recipe<?> recipe) {
         RecipeType<?> type = recipe.getType();
-        if (type == RecipeType.CRAFTING)        return "minecraft:crafting";
-        if (type == RecipeType.SMELTING)         return "minecraft:smelting";
-        if (type == RecipeType.BLASTING)         return "minecraft:blasting";
-        if (type == RecipeType.SMOKING)          return "minecraft:smoking";
+        if (type == RecipeType.CRAFTING) return "minecraft:crafting";
+        if (type == RecipeType.SMELTING) return "minecraft:smelting";
+        if (type == RecipeType.BLASTING) return "minecraft:blasting";
+        if (type == RecipeType.SMOKING) return "minecraft:smoking";
         if (type == RecipeType.CAMPFIRE_COOKING) return "minecraft:campfire";
-        if (type == RecipeType.STONECUTTING)     return "minecraft:stonecutting";
-        if (type == RecipeType.SMITHING)         return "minecraft:smithing";
+        if (type == RecipeType.STONECUTTING) return "minecraft:stonecutting";
+        if (type == RecipeType.SMITHING) return "minecraft:smithing";
         LOGGER.debug("[Atlas] Unknown recipe type: {}", type);
         return null;
     }
 
     private static StationKey stationForCategory(String categoryId) {
         return switch (categoryId) {
-            case "minecraft:crafting"    -> new StationKey("minecraft:crafting_table");
-            case "minecraft:smelting"    -> new StationKey("minecraft:furnace");
-            case "minecraft:blasting"    -> new StationKey("minecraft:blast_furnace");
-            case "minecraft:smoking"     -> new StationKey("minecraft:smoker");
-            case "minecraft:campfire"    -> new StationKey("minecraft:campfire");
-            case "minecraft:stonecutting"-> new StationKey("minecraft:stonecutter");
-            case "minecraft:smithing"    -> new StationKey("minecraft:smithing_table");
+            case "minecraft:crafting" -> new StationKey("minecraft:crafting_table");
+            case "minecraft:smelting" -> new StationKey("minecraft:furnace");
+            case "minecraft:blasting" -> new StationKey("minecraft:blast_furnace");
+            case "minecraft:smoking" -> new StationKey("minecraft:smoker");
+            case "minecraft:campfire" -> new StationKey("minecraft:campfire");
+            case "minecraft:stonecutting" -> new StationKey("minecraft:stonecutter");
+            case "minecraft:smithing" -> new StationKey("minecraft:smithing_table");
             default -> null;
         };
     }

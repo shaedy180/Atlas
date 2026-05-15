@@ -1,15 +1,14 @@
 package dev.atlasmod.api.plugin;
 
+import dev.atlasmod.api.AtlasRegistrationContext;
+
 /**
- * Marker interface for Atlas plugins provided by other mods.
- * Mods implement this and register it via their mod initializer or
- * a datapack-driven entrypoint.
+ * Atlas integrations register data through a scoped context.
  */
 public interface AtlasPlugin {
 
     /**
-     * Called when Atlas is ready to accept registrations.
-     * Register your categories, recipes, info pages, etc. here.
+     * Called during Atlas registry construction.
      */
-    void onAtlasReady();
+    void register(AtlasRegistrationContext context);
 }

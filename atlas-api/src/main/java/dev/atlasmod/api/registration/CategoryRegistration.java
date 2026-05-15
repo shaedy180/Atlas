@@ -1,29 +1,26 @@
 package dev.atlasmod.api.registration;
 
+import dev.atlasmod.api.internal.AtlasRegistrationSink;
 import dev.atlasmod.core.category.RecipeCategory;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.Objects;
 
 /**
  * Fluent builder for registering recipe categories with Atlas.
- *
- * Pending registrations accumulate in a synchronized list and are drained
- * by the Atlas runtime during initialization. This is safe for concurrent
- * registration from multiple mod entrypoints.
  */
 public final class CategoryRegistration {
 
-    private static final List<RecipeCategory> PENDING = Collections.synchronizedList(new ArrayList<>());
-
+    private final AtlasRegistrationSink sink;
+    private final String ownerModId;
     private final String id;
     private String name;
     private String icon;
     private int order = 100;
 
-    public CategoryRegistration(String id) {
-        this.id = id;
+    public CategoryRegistration(AtlasRegistrationSink sink, String ownerModId, String id) {
+        this.sink = Objects.requireNonNull(sink, "sink must not be null");
+        this.ownerModId = Objects.requireNonNull(ownerModId, "ownerModId must not be null");
+        this.id = Objects.requireNonNull(id, "id must not be null");
     }
 
     public CategoryRegistration name(String name) {
@@ -42,15 +39,6 @@ public final class CategoryRegistration {
     }
 
     public void register() {
-        if (name == null) name = id;
-        PENDING.add(new RecipeCategory(id, name, icon, order));
-    }
-
-    public static List<RecipeCategory> drainPending() {
-        synchronized (PENDING) {
-            List<RecipeCategory> result = List.copyOf(PENDING);
-            PENDING.clear();
-            return result;
-        }
+        sink.addCategory(new RecipeCategory(id, ownerModId, name != null ? name : id, icon, order));
     }
 }

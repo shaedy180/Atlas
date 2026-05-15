@@ -1,23 +1,24 @@
 package dev.atlasmod.api.registration;
 
+import dev.atlasmod.api.internal.AtlasRegistrationSink;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.entry.StationKey;
-import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.core.recipe.RecipeNode;
 import dev.atlasmod.core.unlock.UnlockCondition;
+import dev.atlasmod.core.visibility.VisibilityPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
- * Fluent builder for registering recipes with Atlas (API Stufe 2).
+ * Fluent builder for registering recipes with Atlas.
  */
 public final class RecipeRegistration {
 
-    private final RecipeGraph graph;
+    private final AtlasRegistrationSink sink;
+    private final String ownerModId;
     private final String categoryId;
     private String id;
     private final List<IngredientKey> inputs = new ArrayList<>();
@@ -25,10 +26,17 @@ public final class RecipeRegistration {
     private StationKey station;
     private int time;
     private int energy;
+    private int gridWidth;
+    private int gridHeight;
     private UnlockCondition unlockCondition;
+    private VisibilityPolicy visibility = VisibilityPolicy.VISIBLE;
+    private final List<String> searchAliases = new ArrayList<>();
+    private String rendererKey;
 
-    public RecipeRegistration(RecipeGraph graph, String categoryId) {
-        this.graph = Objects.requireNonNull(graph, "graph must not be null");
+    public RecipeRegistration(AtlasRegistrationSink sink, String ownerModId, String id, String categoryId) {
+        this.sink = Objects.requireNonNull(sink, "sink must not be null");
+        this.ownerModId = Objects.requireNonNull(ownerModId, "ownerModId must not be null");
+        this.id = id;
         this.categoryId = Objects.requireNonNull(categoryId, "categoryId must not be null");
     }
 
@@ -62,21 +70,57 @@ public final class RecipeRegistration {
         return this;
     }
 
+    public RecipeRegistration grid(int width, int height) {
+        this.gridWidth = width;
+        this.gridHeight = height;
+        return this;
+    }
+
     public RecipeRegistration unlock(UnlockCondition condition) {
         this.unlockCondition = condition;
         return this;
     }
 
+    public RecipeRegistration visibility(VisibilityPolicy visibility) {
+        this.visibility = Objects.requireNonNull(visibility, "visibility must not be null");
+        return this;
+    }
+
+    public RecipeRegistration searchAlias(String alias) {
+        this.searchAliases.add(Objects.requireNonNull(alias, "alias must not be null"));
+        return this;
+    }
+
+    public RecipeRegistration searchAliases(String... aliases) {
+        for (String alias : aliases) {
+            searchAlias(alias);
+        }
+        return this;
+    }
+
+    public RecipeRegistration renderer(String rendererKey) {
+        this.rendererKey = rendererKey;
+        return this;
+    }
+
     public void register() {
-        String nodeId = this.id != null ? this.id : categoryId + "/" + UUID.randomUUID();
-        RecipeNode node = RecipeNode.builder(nodeId, categoryId)
+        if (id == null || id.isBlank()) {
+            throw new IllegalStateException("Recipe id must be set before register()");
+        }
+        if (outputs.isEmpty()) {
+            throw new IllegalStateException("Recipe " + id + " must declare at least one output");
+        }
+        sink.addRecipe(RecipeNode.builder(id, ownerModId, categoryId)
                 .inputs(inputs)
                 .outputs(outputs)
                 .station(station)
                 .processingTime(time)
                 .energyCost(energy)
+                .grid(gridWidth, gridHeight)
                 .unlockCondition(unlockCondition)
-                .build();
-        graph.addNode(node);
+                .visibilityPolicy(visibility)
+                .searchAliases(searchAliases)
+                .rendererKey(rendererKey)
+                .build());
     }
 }

@@ -16,6 +16,12 @@ import java.util.List;
  */
 public final class AvailabilityEngine {
 
+    public enum AvailabilityState {
+        AVAILABLE,
+        BLOCKED,
+        UNKNOWN
+    }
+
     /**
      * Result of evaluating a recipe's availability.
      *
@@ -24,7 +30,7 @@ public final class AvailabilityEngine {
      * @param blockers  list of human-readable explanations for unmet conditions
      */
     public record AvailabilityResult(
-            boolean available,
+            AvailabilityState state,
             VisibilityPolicy policy,
             List<String> blockers
     ) {
@@ -32,8 +38,16 @@ public final class AvailabilityEngine {
             blockers = List.copyOf(blockers);
         }
 
+        public boolean available() {
+            return state == AvailabilityState.AVAILABLE;
+        }
+
+        public boolean unknown() {
+            return state == AvailabilityState.UNKNOWN;
+        }
+
         public static final AvailabilityResult AVAILABLE =
-                new AvailabilityResult(true, VisibilityPolicy.VISIBLE, List.of());
+                new AvailabilityResult(AvailabilityState.AVAILABLE, VisibilityPolicy.VISIBLE, List.of());
     }
 
     /**
@@ -52,6 +66,10 @@ public final class AvailabilityEngine {
             return AvailabilityResult.AVAILABLE;
         }
 
+        if (isProgressionCondition(cond) && !context.progressionSynchronized()) {
+            return new AvailabilityResult(AvailabilityState.UNKNOWN, VisibilityPolicy.TEASER, blockers);
+        }
+
         // Recipe is blocked - determine visibility policy
         VisibilityPolicy policy = switch (cond) {
             case UnlockCondition.RequiresProgression _ -> VisibilityPolicy.HIDDEN;
@@ -59,7 +77,12 @@ public final class AvailabilityEngine {
             default -> VisibilityPolicy.GREYED_OUT;
         };
 
-        return new AvailabilityResult(false, policy, blockers);
+        return new AvailabilityResult(AvailabilityState.BLOCKED, policy, blockers);
+    }
+
+    private boolean isProgressionCondition(UnlockCondition condition) {
+        return condition instanceof UnlockCondition.RequiresAdvancement
+                || condition instanceof UnlockCondition.RequiresProgression;
     }
 
     /**
@@ -85,11 +108,19 @@ public final class AvailabilityEngine {
                 yield in;
             }
             case UnlockCondition.RequiresAdvancement req -> {
+                if (!ctx.progressionSynchronized()) {
+                    blockers.add("Progression state not synchronized yet");
+                    yield false;
+                }
                 boolean has = ctx.advancements().contains(req.advancementId());
                 if (!has) blockers.add(req.explain());
                 yield has;
             }
             case UnlockCondition.RequiresProgression req -> {
+                if (!ctx.progressionSynchronized()) {
+                    blockers.add("Progression state not synchronized yet");
+                    yield false;
+                }
                 // Progression stages are opaque strings; check if it's in advancements
                 boolean has = ctx.advancements().contains(req.stageKey());
                 if (!has) blockers.add(req.explain());

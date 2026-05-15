@@ -1,6 +1,5 @@
 package dev.atlasmod.fabric;
 
-import dev.atlasmod.api.AtlasApi;
 import dev.atlasmod.core.availability.AvailabilityEngine;
 import dev.atlasmod.core.availability.ContextSnapshot;
 import dev.atlasmod.core.entry.EntryKey;
@@ -8,9 +7,8 @@ import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.recipe.AcquisitionSource;
 import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.core.recipe.RecipeNode;
+import dev.atlasmod.core.registry.AtlasInfoPage;
 import dev.atlasmod.core.visibility.VisibilityPolicy;
-import dev.atlasmod.search.SearchIndex;
-import dev.atlasmod.search.SearchQuery;
 import dev.atlasmod.ui.DeepModeTab;
 import dev.atlasmod.ui.PinnedPlanManager;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -173,23 +171,12 @@ public class AtlasScreen extends Screen {
         filterLabels.add("Vanilla");
         filterOptions.add("Saved");
         filterLabels.add("Saved");
-        var graph = AtlasFabricClient.recipeGraph();
-        if (graph != null) {
-            TreeSet<String> mods = new TreeSet<>();
-            for (var node : graph.allNodes()) {
-                String id = node.id();
-                int colon = id.indexOf(':');
-                if (colon > 0) {
-                    String ns = id.substring(0, colon);
-                    if (!"minecraft".equals(ns)) {
-                        mods.add(ns);
-                    }
-                }
-            }
-            for (String mod : mods) {
-                filterOptions.add("@" + mod);
-                filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
-            }
+        TreeSet<String> mods = new TreeSet<>(AtlasRuntimeController.clientSnapshot().ownerModIds());
+        mods.remove("minecraft");
+        mods.remove(AtlasFabricClient.MOD_ID);
+        for (String mod : mods) {
+            filterOptions.add("@" + mod);
+            filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
         }
         if (activeFilter >= filterLabels.size()) {
             activeFilter = 0;
@@ -209,49 +196,10 @@ public class AtlasScreen extends Screen {
     }
 
     private void onSearchChanged(String text) {
-        SearchIndex index = AtlasFabricClient.searchIndex();
-        if (index == null) {
-            searchResults = List.of();
-            return;
-        }
-        // If "Saved" filter is active, filter to saved items only
-        if (activeFilter >= 0 && activeFilter < filterOptions.size() && "Saved".equals(filterOptions.get(activeFilter))) {
-            PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
-            var savedTargets = new java.util.HashSet<EntryKey>();
-            for (var plan : pm.plans()) {
-                savedTargets.add(plan.target());
-            }
-            SearchQuery query = SearchQuery.parse(text);
-            var allResults = index.search(query);
-            searchResults = allResults.stream().filter(savedTargets::contains).toList();
-        } else {
-            SearchQuery query = SearchQuery.parse(text);
-            List<EntryKey> raw = index.search(query);
-
-            // Apply availability-based filters when requested
-            if (query.onlyUnlocked() || !query.includeHidden()) {
-                RecipeGraph graph = AtlasApi.get().recipeGraph();
-                ContextSnapshot ctx = ContextSnapshotBuilder.capture();
-                AvailabilityEngine engine = new AvailabilityEngine();
-
-                raw = raw.stream().filter(entry -> {
-                    List<RecipeNode> recipes = graph.recipesFor(entry);
-                    if (recipes.isEmpty()) return true; // no recipes means no restrictions
-
-                    for (RecipeNode recipe : recipes) {
-                        var result = engine.evaluate(recipe, ctx);
-                        // ~unlocked: only show items where at least one recipe is available
-                        if (query.onlyUnlocked() && result.available()) return true;
-                        // Default (no !hidden): skip items where all recipes are hidden
-                        if (!query.includeHidden() && result.policy() == VisibilityPolicy.HIDDEN) continue;
-                        if (!query.onlyUnlocked()) return true;
-                    }
-                    return false;
-                }).toList();
-            }
-
-            searchResults = raw;
-        }
+        boolean savedOnly = activeFilter >= 0
+                && activeFilter < filterOptions.size()
+                && "Saved".equals(filterOptions.get(activeFilter));
+        searchResults = AtlasClientSearch.search(text, savedOnly);
         scrollOffset = 0;
     }
 
@@ -569,26 +517,14 @@ public class AtlasScreen extends Screen {
     }
 
     private static String categoryLabel(String categoryId) {
-        return switch (categoryId) {
-            case "minecraft:crafting"     -> "Crafting";
-            case "minecraft:smelting"     -> "Smelting";
-            case "minecraft:blasting"     -> "Blasting";
-            case "minecraft:smoking"      -> "Smoking";
-            case "minecraft:campfire"     -> "Campfire";
-            case "minecraft:stonecutting" -> "Stonecutting";
-            case "minecraft:smithing"     -> "Smithing";
-            default -> {
-                String raw = categoryId.contains(":") ? categoryId.substring(categoryId.indexOf(':') + 1) : categoryId;
-                yield raw.substring(0, 1).toUpperCase() + raw.substring(1).replace('_', ' ');
-            }
-        };
+        return AtlasCategoryHelper.labelFor(categoryId);
     }
 
     private void drawUseTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
         if (selectedEntry == null) return;
 
         // Find recipes that use this item as an input
-        RecipeGraph graph = AtlasApi.get().recipeGraph();
+        RecipeGraph graph = AtlasFabricClient.recipeGraph();
         List<RecipeNode> uses = new ArrayList<>();
         for (RecipeNode node : graph.allNodes()) {
             for (var input : node.inputs()) {
@@ -641,26 +577,35 @@ public class AtlasScreen extends Screen {
     }
 
     private void drawSourcesTab(GuiGraphicsExtractor gfx, int x, int y) {
-        if (selectedRecipes.isEmpty()) {
+        List<AcquisitionSource> sources = selectedEntry == null
+                ? List.of()
+                : AtlasRuntimeController.clientSnapshot().sourcesFor(selectedEntry);
+
+        if (selectedRecipes.isEmpty() && sources.isEmpty()) {
             gfx.text(font, Component.literal("No sources found"), x, y, TEXT_COLOR);
             return;
         }
 
-        gfx.text(font, Component.literal("All sources (" + selectedRecipes.size() + "):"), x, y, TEXT_COLOR);
+        gfx.text(font, Component.literal("All sources:"), x, y, TEXT_COLOR);
         y += 14;
 
         for (RecipeNode recipe : selectedRecipes) {
             if (y > height - 20) break;
-            String source = recipe.categoryId().replace("minecraft:", "").replace("atlas:", "");
-            gfx.text(font, Component.literal("  " + source + " - " + recipe.id()),
+            gfx.text(font, Component.literal("  Recipe: " + categoryLabel(recipe.categoryId()) + " - " + recipe.id()),
                     x, y, 0xFFAAAAFF);
             y += 12;
+        }
 
-            // Show acquisition sources if present
-            for (AcquisitionSource src : recipe.sources()) {
-                if (y > height - 20) break;
-                gfx.text(font, Component.literal("    " + src.type().name() + ": " + src.description()),
-                        x, y, 0xFF888888);
+        for (AcquisitionSource source : sources) {
+            if (y > height - 20) break;
+            String line = "  " + source.type().name() + ": " + source.description();
+            if (source.renewable()) {
+                line += " [renewable]";
+            }
+            gfx.text(font, Component.literal(line), x, y, 0xFF88CCAA);
+            y += 10;
+            if (source.optionalDetail().isPresent()) {
+                gfx.text(font, Component.literal("    " + source.optionalDetail().get()), x, y, 0xFF888888);
                 y += 10;
             }
         }
@@ -830,9 +775,18 @@ public class AtlasScreen extends Screen {
         gfx.text(font, Component.literal("Notes for " + selectedEntry.path()), x, y, 0xFF8888FF);
         y += 16;
 
-        // Info pages are loaded from datapacks (data/<ns>/atlas/info_pages/).
-        // Until the datapack loader is wired, show a placeholder with useful
-        // static information about the selected item.
+        List<AtlasInfoPage> infoPages = AtlasRuntimeController.clientSnapshot().infoPagesFor(selectedEntry);
+        if (!infoPages.isEmpty()) {
+            for (AtlasInfoPage infoPage : infoPages) {
+                if (y > height - 40) break;
+                gfx.text(font, Component.literal(infoPage.title()), x, y, 0xFFAAAAFF);
+                y += 12;
+                gfx.text(font, Component.literal(infoPage.body()), x, y, 0xFFCCCCCC);
+                y += 14;
+            }
+            y += 4;
+        }
+
         gfx.text(font, Component.literal("Item ID: " + selectedEntry.id()), x, y, 0xFF888888);
         y += 12;
         gfx.text(font, Component.literal("Type: " + selectedEntry.type()), x, y, 0xFF888888);
@@ -966,7 +920,7 @@ public class AtlasScreen extends Screen {
                 if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
                         && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
                     selectedEntry = hitBox.entry;
-                    selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                    selectedRecipes = AtlasFabricClient.recipeGraph().recipesFor(selectedEntry);
                     LOGGER.info("[Atlas] Recipe click-through: {}", selectedEntry.id());
                     return true;
                 }
@@ -1001,7 +955,7 @@ public class AtlasScreen extends Screen {
 
             if (col < gridColumns && idx >= 0 && idx < searchResults.size()) {
                 selectedEntry = searchResults.get(idx);
-                selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
+                selectedRecipes = AtlasFabricClient.recipeGraph().recipesFor(selectedEntry);
 
                 // Creative mode: give item to player
                 giveItemIfCreative(selectedEntry, event);

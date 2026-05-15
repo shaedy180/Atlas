@@ -25,6 +25,8 @@ import java.util.Set;
 public final class ContextSnapshotBuilder {
 
     private static final int NEARBY_BLOCK_RADIUS = 5;
+    private static long cachedGameTime = Long.MIN_VALUE;
+    private static ContextSnapshot cachedSnapshot = ContextSnapshot.empty();
 
     private ContextSnapshotBuilder() {}
 
@@ -38,7 +40,14 @@ public final class ContextSnapshotBuilder {
         ClientLevel level = mc.level;
 
         if (player == null || level == null) {
+            cachedGameTime = Long.MIN_VALUE;
+            cachedSnapshot = ContextSnapshot.empty();
             return ContextSnapshot.empty();
+        }
+
+        long gameTime = level.getGameTime();
+        if (cachedGameTime == gameTime) {
+            return cachedSnapshot;
         }
 
         String dimensionId = level.dimension().identifier().toString();
@@ -55,7 +64,14 @@ public final class ContextSnapshotBuilder {
         // Leave empty for now; a future network packet could sync this.
         Set<String> advancements = Set.of();
 
-        return new ContextSnapshot(dimensionId, biomeId, advancements, inventoryItemIds, nearbyBlockIds);
+        cachedGameTime = gameTime;
+        cachedSnapshot = new ContextSnapshot(dimensionId, biomeId, advancements, inventoryItemIds, nearbyBlockIds, false);
+        return cachedSnapshot;
+    }
+
+    public static void invalidateCache() {
+        cachedGameTime = Long.MIN_VALUE;
+        cachedSnapshot = ContextSnapshot.empty();
     }
 
     private static Set<String> collectInventoryItems(LocalPlayer player) {
