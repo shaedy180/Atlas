@@ -1,34 +1,27 @@
-name: Build Atlas
-
+name: Build
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, working-branch]
   pull_request:
-    branches: [ main ]
-
+    branches: [main]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java 25
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v6
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '25'}
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x ./gradlew
+      - run: ./gradlew build --no-daemon
+      - uses: actions/upload-artifact@v4
         with:
-          distribution: 'oracle'
-          java-version: '25'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build
-        run: ./gradlew build --no-daemon
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: atlas-build
+          name: Atlas-${{ github.sha }}
           path: atlas-loader-fabric/build/libs/*.jar
-          if-no-files-found: warn
+          if-no-files-found: error
