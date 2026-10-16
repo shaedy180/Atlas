@@ -245,3 +245,11 @@ For answers to common questions about this code of conduct, see the FAQ at
 [Mozilla CoC]: https://github.com/mozilla/diversity
 [FAQ]: https://www.contributor-covenant.org/faq
 [translations]: https://www.contributor-covenant.org/translations
+
+## Efficient CI and verified releases
+
+Open a draft or ready PR from `working-branch` to `main` to run the complete validation suite. A push to `working-branch` alone does not start CI; use **Run workflow** for checks before opening a PR. New PR updates cancel obsolete runs for that PR. Main and release runs are never cancelled by a newer PR update.
+
+After every required PR job succeeds, **CI provenance** records the tested merge commit. On a `main` push, CI runs only a small verification gate: the latest matching PR run must be successful, its receipt must be current and unexpired, and its tested Git tree and both merge parents must exactly match the actual merge. Missing, failed, stale or mismatched evidence blocks release instead of silently skipping checks. Update the PR against current `main` and wait for all required checks before merging. If a receipt has expired, rerun the complete original PR workflow, then rerun the main gate.
+
+Release-specific builds, tag checks, immutable commit labels, publishing and deployment safeguards remain in place. Main publication starts only after the verification gate succeeds; the application test suite is not repeated after merge. Manual and tag/release validation remain available. Keep both the existing required checks and **CI provenance** required in branch protection.
