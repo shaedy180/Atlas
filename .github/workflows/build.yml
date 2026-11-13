@@ -26,6 +26,7 @@ jobs:
           name: Atlas-${{ github.sha }}
           path: atlas-loader-fabric/build/libs/*.jar
           if-no-files-found: error
+          retention-days: 7
 
   ci_provenance:
     name: CI provenance
@@ -57,4 +58,4 @@ jobs:
           name: ${{ steps.receipt.outputs.artifact }}
           path: ci-validation.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 14
