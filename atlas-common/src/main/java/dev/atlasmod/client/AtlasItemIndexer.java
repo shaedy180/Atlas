@@ -1,12 +1,13 @@
-package dev.atlasmod.fabric;
+package dev.atlasmod.client;
 
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.search.SearchIndex;
-import net.minecraft.core.Holder;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
-import net.minecraft.tags.TagKey;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,27 +26,45 @@ public final class AtlasItemIndexer {
 
     /**
      * Clears and rebuilds the search index from BuiltInRegistries.ITEM.
+     * Items are found by their shown name (in the game language), their id and
+     * their translation key. Tooltip lines feed the "#text" search.
      */
     public static void buildIndex(SearchIndex index) {
         index.clear();
+        var mc = Minecraft.getInstance();
+        Item.TooltipContext context = mc.level != null ? Item.TooltipContext.of(mc.level) : Item.TooltipContext.EMPTY;
 
         int count = 0;
-        for (var entry : BuiltInRegistries.ITEM.entrySet()) {
-            Identifier id = entry.getKey().identifier();
-            Item item = entry.getValue();
+        for (var holder : BuiltInRegistries.ITEM.listElements().toList()) {
+            String id = holder.key().identifier().toString();
+            var item = holder.value();
+            ItemStack stack = new ItemStack(item);
+            if (stack.isEmpty()) continue; // air
 
-            EntryKey key = new EntryKey("item", id.toString());
-            String displayName = item.getDescriptionId();
+            String shown = stack.getHoverName().getString();
+            String searchable = shown + " " + id.substring(id.indexOf(':') + 1).replace('_', ' ')
+                    + " " + item.getDescriptionId();
 
-            // Collect tags for this item
             Set<String> tags = new HashSet<>();
-            Holder<Item> holder = BuiltInRegistries.ITEM.wrapAsHolder(item);
             holder.tags().forEach(tag -> tags.add(tag.location().toString()));
 
-            index.add(key, displayName, tags, null);
+            index.add(new EntryKey("item", id), searchable, tags, tooltip(stack, context, mc));
             count++;
         }
 
         LOGGER.info("[Atlas] Indexed {} items from registry", count);
+    }
+
+    private static String tooltip(ItemStack stack, Item.TooltipContext context, Minecraft mc) {
+        try {
+            StringBuilder text = new StringBuilder();
+            for (Component line : stack.getTooltipLines(context, mc.player, TooltipFlag.NORMAL)) {
+                text.append(line.getString()).append('\n');
+            }
+            return text.toString();
+        } catch (RuntimeException e) {
+            // Some modded items expect more context than a registry scan has
+            return stack.getHoverName().getString();
+        }
     }
 }

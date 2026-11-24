@@ -1,17 +1,17 @@
-package dev.atlasmod.fabric;
+package dev.atlasmod.client;
 
-import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.resources.Identifier;
-import org.lwjgl.glfw.GLFW;
+
+import java.util.List;
 
 /**
- * Key bindings for Atlas.
+ * Key bindings for Atlas. Created here, registered by the loader.
  */
 public final class AtlasKeyBindings {
 
-    public static final KeyMapping.Category CATEGORY =
-            KeyMapping.Category.register(Identifier.fromNamespaceAndPath("atlas", "atlas"));
+    public static final Identifier CATEGORY_ID = Identifier.fromNamespaceAndPath("atlas", "atlas");
 
     public static KeyMapping openAtlas;
     public static KeyMapping toggleQuickMode;
@@ -19,23 +19,11 @@ public final class AtlasKeyBindings {
 
     private AtlasKeyBindings() {}
 
-    public static void register() {
-        openAtlas = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-                "key.atlas.open",
-                GLFW.GLFW_KEY_U,
-                CATEGORY
-        ));
-
-        toggleQuickMode = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-                "key.atlas.quick_toggle",
-                GLFW.GLFW_KEY_O,
-                CATEGORY
-        ));
-
-        focusSearch = KeyMappingHelper.registerKeyMapping(new KeyMapping(
-                "key.atlas.focus_search",
-                GLFW.GLFW_KEY_UNKNOWN,
-                CATEGORY
-        ));
+    /** Creates the mappings in the given category and returns them for registration. */
+    public static List<KeyMapping> create(KeyMapping.Category category) {
+        openAtlas = new KeyMapping("key.atlas.open", InputConstants.KEY_U, category);
+        toggleQuickMode = new KeyMapping("key.atlas.quick_toggle", InputConstants.KEY_O, category);
+        focusSearch = new KeyMapping("key.atlas.focus_search", InputConstants.UNKNOWN.getValue(), category);
+        return List.of(openAtlas, toggleQuickMode, focusSearch);
     }
 }

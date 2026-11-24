@@ -1,80 +1,86 @@
-package dev.atlasmod.fabric;
+package dev.atlasmod.client;
 
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
 import dev.atlasmod.api.AtlasApi;
-import dev.atlasmod.api.registration.CategoryRegistration;
+import dev.atlasmod.client.compat.McCompat;
 import dev.atlasmod.core.category.RecipeCategory;
+import dev.atlasmod.core.plan.CraftingPlan;
 import dev.atlasmod.core.recipe.RecipeGraph;
 import dev.atlasmod.core.recipe.RecipeNode;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.BiConsumer;
 
 /**
  * Client-side /atlas command tree for diagnostics and debugging.
- * All subcommands output results to the local chat — nothing is sent to the server.
+ * All subcommands answer in the local chat, nothing is sent to the server.
+ * Built with plain Brigadier so both loaders can register the same tree.
  */
 public final class AtlasCommands {
 
     private AtlasCommands() {}
 
     /**
-     * Registers all /atlas subcommands. Called once during mod init.
+     * Builds the /atlas tree for a loader's command source type.
+     *
+     * @param feedback sends a chat line to the player for the given source
      */
-    public static void register() {
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(
-                ClientCommands.literal("atlas")
-                    .then(ClientCommands.literal("open")
-                        .executes(ctx -> runOpen(ctx.getSource())))
-                    .then(ClientCommands.literal("quick")
-                        .executes(ctx -> runQuickToggle(ctx.getSource())))
-                    .then(ClientCommands.literal("debug")
-                        .executes(ctx -> runDebug(ctx.getSource())))
-                    .then(ClientCommands.literal("stats")
-                        .executes(ctx -> runStats(ctx.getSource())))
-                    .then(ClientCommands.literal("reload")
-                        .executes(ctx -> runReload(ctx.getSource())))
-            );
-        });
+    public static <S> LiteralArgumentBuilder<S> build(BiConsumer<S, Component> feedback) {
+        return LiteralArgumentBuilder.<S>literal("atlas")
+                .then(LiteralArgumentBuilder.<S>literal("open").executes(ctx -> run(ctx, feedback, AtlasCommands::open)))
+                .then(LiteralArgumentBuilder.<S>literal("quick").executes(ctx -> run(ctx, feedback, AtlasCommands::quick)))
+                .then(LiteralArgumentBuilder.<S>literal("debug").executes(ctx -> run(ctx, feedback, AtlasCommands::debug)))
+                .then(LiteralArgumentBuilder.<S>literal("stats").executes(ctx -> run(ctx, feedback, AtlasCommands::stats)))
+                .then(LiteralArgumentBuilder.<S>literal("plans").executes(ctx -> run(ctx, feedback, AtlasCommands::plans)))
+                .then(LiteralArgumentBuilder.<S>literal("reload").executes(ctx -> run(ctx, feedback, AtlasCommands::reload)));
     }
 
-    private static int runOpen(FabricClientCommandSource source) {
-        Minecraft client = source.getClient();
-        client.setScreen(new AtlasScreen());
-        source.sendFeedback(Component.literal("§a[Atlas] Opened Deep Mode."));
+    private interface Action {
+        void run(List<Component> out);
+    }
+
+    private static <S> int run(CommandContext<S> ctx, BiConsumer<S, Component> feedback, Action action) {
+        List<Component> out = new ArrayList<>();
+        action.run(out);
+        out.forEach(line -> feedback.accept(ctx.getSource(), line));
         return 1;
     }
 
-    private static int runQuickToggle(FabricClientCommandSource source) {
+    private static Component line(String text) {
+        return Component.literal(text);
+    }
+
+    private static void open(List<Component> out) {
+        // The chat screen closes after the command runs, so open on the next frame
+        Minecraft.getInstance().execute(() -> McCompat.openScreen(new AtlasScreen()));
+        out.add(line("§a[Atlas] Opened Deep Mode."));
+    }
+
+    private static void quick(List<Component> out) {
         QuickModeOverlay.toggle();
-        source.sendFeedback(Component.literal("§a[Atlas] Quick Mode "
-                + (QuickModeOverlay.isEnabled() ? "enabled" : "disabled") + "."));
-        return 1;
+        out.add(line("§a[Atlas] Quick Mode " + (QuickModeOverlay.isEnabled() ? "enabled" : "disabled") + "."));
     }
 
-    // ── /atlas debug ─────────────────────────────────────────────────────
+    // -- /atlas debug ---------------------------------------------------------
 
     /**
      * Runs a full diagnostic sweep over the Atlas graph and reports issues.
-     * Checks: orphaned categories, empty outputs, missing stations, cycles.
+     * Checks: orphaned categories, empty outputs, unknown categories, cycles.
      */
-    private static int runDebug(FabricClientCommandSource source) {
+    private static void debug(List<Component> out) {
         RecipeGraph graph = AtlasApi.get().recipeGraph();
-        List<RecipeCategory> categories = CategoryRegistration.drainPending();
-
-        source.sendFeedback(Component.literal("§6[Atlas Debug] Running diagnostics..."));
+        Set<String> categoryIds = AtlasApi.get().categories().keySet();
+        out.add(line("§6[Atlas Debug] Running diagnostics..."));
 
         List<String> issues = new ArrayList<>();
-        Set<String> categoryIds = new HashSet<>();
-        for (RecipeCategory cat : categories) {
-            categoryIds.add(cat.id());
-        }
-
-        int totalNodes = graph.size();
         int emptyOutputs = 0;
         int emptyInputs = 0;
         int missingCategory = 0;
@@ -82,106 +88,101 @@ public final class AtlasCommands {
 
         for (RecipeNode node : graph.allNodes()) {
             usedCategories.add(node.categoryId());
-
             if (node.outputs().isEmpty()) {
                 emptyOutputs++;
                 issues.add("Empty outputs: " + node.id());
             }
-            if (node.inputs().isEmpty()) {
-                emptyInputs++;
-            }
-            // Check if category is registered (if we have category data)
-            if (!categoryIds.isEmpty() && !categoryIds.contains(node.categoryId())) {
+            if (node.inputs().isEmpty()) emptyInputs++;
+            if (!categoryIds.contains(node.categoryId())) {
                 missingCategory++;
                 issues.add("Unknown category '" + node.categoryId() + "' in: " + node.id());
             }
         }
 
-        // Orphaned categories (registered but no recipes use them)
-        if (!categoryIds.isEmpty()) {
-            for (String catId : categoryIds) {
-                if (!usedCategories.contains(catId)) {
-                    issues.add("Orphaned category (no recipes): " + catId);
-                }
+        // Atlas' own source categories are filled by integrations, so an empty one is normal
+        for (String catId : categoryIds) {
+            if (!usedCategories.contains(catId) && !catId.startsWith("atlas:")) {
+                issues.add("Category without recipes: " + catId);
             }
         }
 
-        // Report results
-        source.sendFeedback(Component.literal("§a[Atlas Debug] Total recipes: " + totalNodes));
-        source.sendFeedback(Component.literal("§a[Atlas Debug] Categories used: " + usedCategories.size()));
-        source.sendFeedback(Component.literal("§a[Atlas Debug] Search index: " + AtlasFabricClient.searchIndex().size() + " items"));
-
-        if (emptyOutputs > 0) {
-            source.sendFeedback(Component.literal("§e[Atlas Debug] Recipes with empty outputs: " + emptyOutputs));
-        }
-        if (emptyInputs > 0) {
-            source.sendFeedback(Component.literal("§e[Atlas Debug] Recipes with no inputs: " + emptyInputs));
-        }
-        if (missingCategory > 0) {
-            source.sendFeedback(Component.literal("§c[Atlas Debug] Recipes with unknown category: " + missingCategory));
-        }
+        out.add(line("§a[Atlas Debug] Total recipes: " + graph.size()));
+        out.add(line("§a[Atlas Debug] Categories used: " + usedCategories.size() + " of " + categoryIds.size()));
+        out.add(line("§a[Atlas Debug] Search index: " + AtlasClient.searchIndex().size() + " items"));
+        out.add(line("§a[Atlas Debug] Tags: " + AtlasClient.tags().tagCount()
+                + ", info pages: " + AtlasApi.get().infoRegistry().size()
+                + ", plugins: " + AtlasClient.plugins().size()));
+        if (emptyOutputs > 0) out.add(line("§e[Atlas Debug] Recipes with empty outputs: " + emptyOutputs));
+        if (emptyInputs > 0) out.add(line("§e[Atlas Debug] Recipes with no inputs: " + emptyInputs));
+        if (missingCategory > 0) out.add(line("§c[Atlas Debug] Recipes with unknown category: " + missingCategory));
 
         if (issues.isEmpty()) {
-            source.sendFeedback(Component.literal("§a[Atlas Debug] No issues found — graph is healthy."));
+            out.add(line("§a[Atlas Debug] No issues found, the graph is healthy."));
         } else {
             int shown = Math.min(issues.size(), 10);
-            for (int i = 0; i < shown; i++) {
-                source.sendFeedback(Component.literal("§c  - " + issues.get(i)));
-            }
-            if (issues.size() > shown) {
-                source.sendFeedback(Component.literal("§c  ... and " + (issues.size() - shown) + " more issues"));
-            }
+            for (int i = 0; i < shown; i++) out.add(line("§c  - " + issues.get(i)));
+            if (issues.size() > shown) out.add(line("§c  ... and " + (issues.size() - shown) + " more issues"));
         }
-
-        return 1;
     }
 
-    // ── /atlas stats ─────────────────────────────────────────────────────
+    // -- /atlas stats ---------------------------------------------------------
 
-    /**
-     * Quick summary of loaded data.
-     */
-    private static int runStats(FabricClientCommandSource source) {
+    private static void stats(List<Component> out) {
         RecipeGraph graph = AtlasApi.get().recipeGraph();
-
-        // Count recipes per category
+        Map<String, RecipeCategory> categories = AtlasApi.get().categories();
         Map<String, Integer> perCategory = new LinkedHashMap<>();
-        for (RecipeNode node : graph.allNodes()) {
-            perCategory.merge(node.categoryId(), 1, Integer::sum);
-        }
+        for (RecipeNode node : graph.allNodes()) perCategory.merge(node.categoryId(), 1, Integer::sum);
 
-        source.sendFeedback(Component.literal("§6[Atlas Stats]"));
-        source.sendFeedback(Component.literal("  Recipes: " + graph.size()));
-        source.sendFeedback(Component.literal("  Search index: " + AtlasFabricClient.searchIndex().size() + " items"));
-        source.sendFeedback(Component.literal("  Quick Mode: " + (QuickModeOverlay.isEnabled() ? "ON" : "OFF")));
-
+        out.add(line("§6[Atlas Stats]"));
+        out.add(line("  Recipes: " + graph.size()));
+        out.add(line("  Search index: " + AtlasClient.searchIndex().size() + " items"));
+        out.add(line("  Saved items: " + AtlasClient.savedItems().plans().size()
+                + ", build plans: " + AtlasClient.buildPlans().plans().size()
+                + ", notes: " + AtlasClient.notes().size()));
+        out.add(line("  Quick Mode: " + (QuickModeOverlay.isEnabled() ? "ON" : "OFF")));
         if (!perCategory.isEmpty()) {
-            source.sendFeedback(Component.literal("  §7Per category:"));
+            out.add(line("  §7Per category:"));
             perCategory.entrySet().stream()
                     .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
                     .limit(8)
-                    .forEach(e -> source.sendFeedback(
-                            Component.literal("    " + e.getKey() + ": " + e.getValue())));
+                    .forEach(e -> {
+                        var cat = categories.get(e.getKey());
+                        out.add(line("    " + (cat != null ? cat.name() : e.getKey()) + ": " + e.getValue()));
+                    });
         }
-
-        return 1;
     }
 
-    // ── /atlas reload ────────────────────────────────────────────────────
+    // -- /atlas plans ---------------------------------------------------------
 
-    /**
-     * Force-reloads recipes and rebuilds the search index.
-     */
-    private static int runReload(FabricClientCommandSource source) {
-        source.sendFeedback(Component.literal("§6[Atlas] Reloading recipes..."));
-        try {
-            int count = VanillaRecipeLoader.loadRecipes();
-            AtlasItemIndexer.buildIndex(AtlasFabricClient.searchIndex());
-            source.sendFeedback(Component.literal("§a[Atlas] Reloaded " + count + " recipes, "
-                    + AtlasFabricClient.searchIndex().size() + " items indexed."));
-        } catch (Exception e) {
-            source.sendFeedback(Component.literal("§c[Atlas] Reload failed: " + e.getMessage()));
+    private static void plans(List<Component> out) {
+        var plans = AtlasClient.buildPlans().plans();
+        if (plans.isEmpty()) {
+            out.add(line("§7[Atlas] No build plans. Pin one from the Tree tab in Deep Mode."));
+            return;
         }
-        return 1;
+        out.add(line("§6[Atlas Plans]"));
+        for (var pinned : plans) {
+            CraftingPlan plan = AtlasClient.insights().plan(pinned.target(), pinned.count());
+            String name = ItemStacks.name(pinned.target().id());
+            if (plan.done()) {
+                out.add(line("  §a" + pinned.count() + "x " + name + ": ready"));
+                continue;
+            }
+            out.add(line("  §e" + pinned.count() + "x " + name + ": " + Math.round(plan.progress() * 100) + "%"));
+            plan.missingMaterials().stream().limit(5).forEach(m ->
+                    out.add(line("    §7need " + m.missing() + "x " + ItemStacks.name(m.item().id()))));
+        }
+    }
+
+    // -- /atlas reload --------------------------------------------------------
+
+    private static void reload(List<Component> out) {
+        try {
+            int count = AtlasClient.reload();
+            out.add(line("§a[Atlas] Reloaded " + count + " recipes, "
+                    + AtlasClient.searchIndex().size() + " items indexed."));
+        } catch (Exception e) {
+            out.add(line("§c[Atlas] Reload failed: " + e.getMessage()));
+        }
     }
 }

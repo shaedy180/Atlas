@@ -1,138 +1,83 @@
 package dev.atlasmod.fabric;
 
-import dev.atlasmod.api.AtlasApi;
-import dev.atlasmod.core.invalidation.InvalidationEngine;
-import dev.atlasmod.core.invalidation.InvalidationEvent;
-import dev.atlasmod.core.recipe.RecipeGraph;
-import dev.atlasmod.search.SearchIndex;
-import dev.atlasmod.ui.PinnedPlanManager;
+import dev.atlasmod.api.plugin.AtlasPlugin;
+import dev.atlasmod.client.AtlasClient;
+import dev.atlasmod.client.AtlasCommands;
+import dev.atlasmod.client.AtlasKeyBindings;
+import dev.atlasmod.client.QuickModeOverlay;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.Minecraft;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 
-import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Fabric client entry point for Atlas.
- * Registers events, keybindings, categories, and hooks into world join
- * for recipe loading and search index population.
+ * Fabric entry point. Wires Fabric events to the shared Atlas client.
+ * Third-party plugins are listed under the "atlas" entrypoint key.
  */
 public final class AtlasFabricClient implements ClientModInitializer {
 
-    public static final String MOD_ID = "atlas";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
-
-    private static RecipeGraph recipeGraph;
-    private static InvalidationEngine invalidationEngine;
-    private static SearchIndex searchIndex;
-    private static PinnedPlanManager pinnedPlanManager;
-
-    private static final String PINS_FILE = "atlas_pins.txt";
-    private static final String PREFS_FILE = "atlas_prefs.txt";
-
-    // Guard: load recipes once per world join (reset on disconnect)
-    private static boolean recipesLoaded = false;
+    private static final String ENTRYPOINT_KEY = "atlas";
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("[Atlas] Initializing Atlas - Recipe & Item Intelligence Layer");
+        AtlasClient.init();
 
-        recipeGraph = new RecipeGraph();
-        invalidationEngine = new InvalidationEngine();
-        searchIndex = new SearchIndex();
-        pinnedPlanManager = new PinnedPlanManager();
+        KeyMapping.Category category = KeyMapping.Category.register(AtlasKeyBindings.CATEGORY_ID);
+        AtlasKeyBindings.create(category).forEach(KeyMappingHelper::registerKeyMapping);
 
-        AtlasApi.init(recipeGraph);
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
+                dispatcher.register(AtlasCommands.<FabricClientCommandSource>build(FabricClientCommandSource::sendFeedback)));
 
-        // Register vanilla recipe categories
-        VanillaRecipeLoader.registerCategories();
+        AtlasClient.loadPlugins(discoverPlugins());
 
-        // Key bindings
-        AtlasKeyBindings.register();
-
-        // Client commands (/atlas debug, /atlas stats, /atlas reload)
-        AtlasCommands.register();
-
-        // Discover and invoke third-party Atlas plugins
-        AtlasPluginLoader.loadAll();
-
-        // Quick Mode overlay on inventory screens
-        QuickModeOverlay.register();
-
-        // Hook: load recipes when we join a world.
-        // The integrated server needs a tick to fully initialize recipes,
-        // so we defer to the first client tick after play connection is ready.
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            recipesLoaded = false;
-            LOGGER.debug("[Atlas] Play connection joined, scheduling recipe load");
-            // Load pinned plans
-            try {
-                pinnedPlanManager.load(pinsPath());
-                LOGGER.debug("[Atlas] Loaded {} pinned plans", pinnedPlanManager.plans().size());
-            } catch (Exception e) {
-                LOGGER.warn("[Atlas] Failed to load pinned plans", e);
-            }
-            // Load quick mode preferences
-            QuickModeOverlay.loadPrefs(prefsPath());
+        ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (!(screen instanceof AbstractContainerScreen<?>)) return;
+            ScreenEvents.afterExtract(screen).register((scr, graphics, mouseX, mouseY, tickDelta) ->
+                    QuickModeOverlay.render(scr, graphics, mouseX, mouseY));
+            ScreenMouseEvents.allowMouseClick(screen).register((scr, event) -> !QuickModeOverlay.handleClick(scr, event));
+            ScreenMouseEvents.allowMouseRelease(screen).register((scr, event) -> {
+                QuickModeOverlay.handleRelease(event);
+                return true;
+            });
+            ScreenMouseEvents.allowMouseScroll(screen).register((scr, mouseX, mouseY, scrollX, scrollY) ->
+                    !QuickModeOverlay.handleScroll(scr, mouseX, mouseY, scrollY));
+            ScreenKeyboardEvents.allowKeyPress(screen).register((scr, event) -> {
+                String typed = TextInput.fromKey(event);
+                if (typed != null && QuickModeOverlay.handleChar(scr, typed)) return false;
+                return !QuickModeOverlay.handleKeyPress(scr, event);
+            });
+            TextInput.register(screen);
         });
 
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            // Save pinned plans before clearing state
-            try {
-                pinnedPlanManager.save(pinsPath());
-                LOGGER.debug("[Atlas] Saved {} pinned plans", pinnedPlanManager.plans().size());
-            } catch (Exception e) {
-                LOGGER.warn("[Atlas] Failed to save pinned plans", e);
-            }
-            // Save quick mode preferences
-            QuickModeOverlay.savePrefs(prefsPath());
-            recipesLoaded = false;
-            recipeGraph.clear();
-            searchIndex.clear();
-            invalidationEngine.fire(InvalidationEvent.WORLD_LEAVE);
-            LOGGER.debug("[Atlas] Disconnected, cleared recipe graph and search index");
-        });
+        // Recipes are read on the first tick after joining, when the integrated server is ready
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> AtlasClient.onJoin());
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> AtlasClient.onLeave());
+        ClientTickEvents.END_CLIENT_TICK.register(AtlasClient::onTick);
 
-        // On the first tick after join, load recipes from the integrated server
-        ClientTickEvents.END_CLIENT_TICK.register(mc -> {
-            if (!recipesLoaded && mc.level != null) {
-                recipesLoaded = true;
-                int count = VanillaRecipeLoader.loadRecipes();
-                AtlasItemIndexer.buildIndex(searchIndex);
-                invalidationEngine.fire(InvalidationEvent.WORLD_JOIN);
-                LOGGER.info("[Atlas] World ready: {} recipes, {} items indexed",
-                        count, searchIndex.size());
-            }
-        });
-
-        // Key binding tick handler for opening screens
-        ClientTickEvents.END_CLIENT_TICK.register(mc -> {
-            if (AtlasKeyBindings.openAtlas.consumeClick()) {
-                mc.setScreen(new AtlasScreen());
-            }
-
-            // Quick mode only makes sense in-world on container screens.
-            if (mc.level != null && AtlasKeyBindings.toggleQuickMode.consumeClick()) {
-                QuickModeOverlay.toggle();
-            }
-        });
-
-        LOGGER.info("[Atlas] Initialization complete. Waiting for world join.");
+        AtlasClient.LOGGER.info("[Atlas] Initialization complete. Waiting for world join.");
     }
 
-    public static RecipeGraph recipeGraph() { return recipeGraph; }
-    public static InvalidationEngine invalidationEngine() { return invalidationEngine; }
-    public static SearchIndex searchIndex() { return searchIndex; }
-    public static PinnedPlanManager pinnedPlanManager() { return pinnedPlanManager; }
-
-    private static Path pinsPath() {
-        return Minecraft.getInstance().gameDirectory.toPath().resolve(PINS_FILE);
-    }
-
-    private static Path prefsPath() {
-        return Minecraft.getInstance().gameDirectory.toPath().resolve(PREFS_FILE);
+    private static List<AtlasClient.PluginEntry> discoverPlugins() {
+        List<AtlasClient.PluginEntry> found = new ArrayList<>();
+        for (var container : FabricLoader.getInstance().getEntrypointContainers(ENTRYPOINT_KEY, AtlasPlugin.class)) {
+            String modId = container.getProvider().getMetadata().getId();
+            try {
+                found.add(new AtlasClient.PluginEntry(modId, container.getEntrypoint()));
+            } catch (Throwable t) {
+                AtlasClient.LOGGER.error("[Atlas] Could not create plugin from mod '{}'", modId, t);
+            }
+        }
+        return found;
     }
 }

@@ -2,19 +2,23 @@ plugins {
     id("net.fabricmc.fabric-loom")
 }
 
-val minecraftVersion: String = rootProject.property("minecraft_version") as String
-val fabricApiVersion: String = rootProject.property("fabric_api_version") as String
-val loaderVersion: String = rootProject.property("loader_version") as String
+val minecraftVersion = property("minecraft_version") as String
+val common = project(":atlas-common")
+val pureModules = listOf(":atlas-core", ":atlas-api", ":atlas-search", ":atlas-ui")
+
+sourceSets.main {
+    java.srcDir(common.file("src/main/java"))
+    java.srcDir(common.file("src/compat/${property("compat")}/java"))
+    java.srcDir("src/textinput/${property("fabric_text_input")}/java")
+    resources.srcDir(common.file("src/main/resources"))
+}
 
 dependencies {
     "minecraft"("com.mojang:minecraft:$minecraftVersion")
-    implementation("net.fabricmc:fabric-loader:$loaderVersion")
-    implementation("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
+    implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
+    implementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
 
-    implementation(project(":atlas-core"))
-    implementation(project(":atlas-api"))
-    implementation(project(":atlas-search"))
-    implementation(project(":atlas-ui"))
+    pureModules.forEach { implementation(project(it)) }
 }
 
 loom {
@@ -30,15 +34,39 @@ loom {
     }
 }
 
-tasks.jar {
-    archiveBaseName.set("atlas")
+val metadata = mapOf(
+    "version" to project.version.toString(),
+    "minecraft_range" to property("fabric_minecraft_range").toString(),
+    "loader_min" to property("fabric_loader_min").toString(),
+)
 
-    from(project(":atlas-core").sourceSets.main.get().output)
-    from(project(":atlas-api").sourceSets.main.get().output)
-    from(project(":atlas-search").sourceSets.main.get().output)
-    from(project(":atlas-ui").sourceSets.main.get().output)
+tasks.processResources {
+    inputs.properties(metadata)
+    filesMatching("fabric.mod.json") {
+        expand(metadata)
+    }
+}
+
+tasks.jar {
+    archiveBaseName.set("atlas-fabric")
+    archiveVersion.set("${project.version}+$minecraftVersion")
+
+    pureModules.forEach { from(project(it).sourceSets.main.get().output) }
 
     manifest {
         attributes("Implementation-Version" to project.version)
+    }
+}
+
+// In-game test: ./gradlew :atlas-loader-fabric:runClientGameTest -Pmc=<version>
+// Starts the client, creates a world, walks through the Atlas screens and saves
+// screenshots to atlas-loader-fabric/build/run/clientGameTest/screenshots. Needs a display.
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "atlas-gametest"
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
     }
 }

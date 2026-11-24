@@ -1,38 +1,57 @@
-package dev.atlasmod.fabric;
+package dev.atlasmod.client;
 
 import dev.atlasmod.api.AtlasApi;
+import dev.atlasmod.client.gui.RecipeView;
+import dev.atlasmod.client.gui.Ui;
+import dev.atlasmod.core.alternative.AlternativeResolver;
+import dev.atlasmod.core.availability.AvailabilityEngine.AvailabilityResult;
+import dev.atlasmod.core.availability.AvailabilityEngine.Blocker;
+import dev.atlasmod.core.availability.AvailabilityEngine.BlockerKind;
+import dev.atlasmod.core.availability.ContextSnapshot;
+import dev.atlasmod.core.category.RecipeCategory;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.entry.IngredientKey;
-import dev.atlasmod.core.recipe.RecipeGraph;
+import dev.atlasmod.core.info.InfoPage;
+import dev.atlasmod.core.plan.CraftingPlan;
+import dev.atlasmod.core.recipe.AcquisitionSource;
 import dev.atlasmod.core.recipe.RecipeNode;
 import dev.atlasmod.search.SearchIndex;
 import dev.atlasmod.search.SearchQuery;
 import dev.atlasmod.ui.DeepModeTab;
+import dev.atlasmod.ui.NoteStore;
 import dev.atlasmod.ui.PinnedPlanManager;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.ConfirmLinkScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.client.Minecraft;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
-import net.minecraft.tags.TagKey;
-import net.minecraft.util.Util;
-import net.minecraft.world.item.Item;
+import net.minecraft.network.chat.FormattedText;
 import net.minecraft.world.item.ItemStack;
-import org.lwjgl.glfw.GLFW;
-
+import com.mojang.blaze3d.platform.InputConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Deep Mode: fullscreen Atlas screen with search, item grid, and recipe panel.
+ * Deep Mode: fullscreen Atlas screen with search, item grid and a detail panel
+ * with one tab per question (how to craft, what it is used for, where it comes
+ * from, the full crafting tree, alternatives, unlock requirements and notes).
  * Opened via keybinding (default: U).
  */
 public class AtlasScreen extends Screen {
@@ -42,110 +61,120 @@ public class AtlasScreen extends Screen {
     // Layout constants
     private static final int SEARCH_HEIGHT = 20;
     private static final int ITEM_SIZE = 18;
-    private static final int GRID_PADDING = 4;
     private static final int PANEL_DIVIDER_X_RATIO = 45; // left panel uses 45% of width
     private static final int HEADER_HEIGHT = 30;
-    private static final int TAB_HEIGHT = 20;
+    private static final int TAB_HEIGHT = 12;
+    private static final int LINE = 11;
+    private static final int MAX_USES = 60;
 
     // Colors
-    private static final int BG_COLOR = 0xCC101010;
     private static final int PANEL_BG = 0xCC1A1A2E;
     private static final int DIVIDER_COLOR = 0xFF404060;
-    private static final int HEADER_COLOR = 0xFFE0E0FF;
-    private static final int TEXT_COLOR = 0xFFCCCCCC;
     private static final int HIGHLIGHT_COLOR = 0x40FFFFFF;
 
     private static final String ISSUES_URL = "https://github.com/shaedy180/Atlas/issues";
 
+    // Kept between openings so the screen comes back the way it was left
+    private static String lastSearch = "";
+    private static EntryKey lastEntry;
+    private static DeepModeTab lastTab = DeepModeTab.CRAFT;
+
+    private final Ui ui = new Ui();
+
     // Filter chips (dynamic: rebuilt on init)
-    private List<String> filterOptions = new ArrayList<>(List.of("", "@minecraft"));
-    private List<String> filterLabels  = new ArrayList<>(List.of("All", "Vanilla"));
+    private List<String> filterOptions = new ArrayList<>();
+    private List<String> filterLabels = new ArrayList<>();
     private int activeFilter = 0;
     private int filterScrollOffset = 0;
     private int totalFilterWidth = 0;
 
     private boolean showHelp = false;
+    private boolean showPlans = false;
 
     private EditBox searchBox;
+    private EditBox noteBox;
     private List<EntryKey> searchResults = List.of();
     private int scrollOffset = 0;
     private int gridColumns = 1;
 
-    // Selected item and its recipes
+    // Selected item, its recipes and navigation history
     private EntryKey selectedEntry;
     private List<RecipeNode> selectedRecipes = List.of();
-    private DeepModeTab activeTab = DeepModeTab.CRAFT;
+    private List<RecipeNode> selectedUses = List.of();
+    private DeepModeTab activeTab;
+    private final Deque<EntryKey> history = new ArrayDeque<>();
 
-    // Recipe item hit boxes for tooltip and click-through
-    private record ItemHitBox(int x, int y, int w, int h, EntryKey entry, ItemStack stack) {}
-    private final List<ItemHitBox> recipeHitBoxes = new ArrayList<>();
+    // Right panel scrolling
+    private int rightScroll = 0;
+    private int contentHeight = 0;
+    private int contentTop = 0;
+    private int contentBottom = 0;
+
+    // Tree tab
+    private int treeCount = 1;
+    private final Set<String> collapsed = new HashSet<>();
+    private CraftingPlan cachedPlan;
+    private String cachedPlanKey = "";
+    private long cachedPlanTime;
 
     // In-UI feedback (visible even when full-screen)
     private String feedbackText = null;
     private long feedbackExpireTime = 0;
 
     public AtlasScreen() {
+        this(lastEntry, lastTab);
+    }
+
+    /** Opens Deep Mode directly on an item and tab. */
+    public AtlasScreen(EntryKey entry, DeepModeTab tab) {
         super(Component.translatable("screen.atlas.title"));
+        this.activeTab = tab == null ? DeepModeTab.CRAFT : tab;
+        if (entry != null) select(entry, false);
     }
 
     @Override
     protected void init() {
         super.init();
-        LOGGER.info("[Atlas] Deep Mode init: {}x{}", width, height);
-
-        // Rebuild dynamic filters
         rebuildFilters();
 
         int leftPanelWidth = panelDividerX();
-
-        // Search box at top of left panel
         searchBox = new EditBox(font, 6, HEADER_HEIGHT + 2, leftPanelWidth - 12, SEARCH_HEIGHT,
                 Component.translatable("screen.atlas.search"));
         searchBox.setMaxLength(128);
-        searchBox.setHint(Component.literal("Search items..."));
+        searchBox.setHint(Component.literal("Search items, @mod, $tag..."));
+        searchBox.setValue(lastSearch);
         searchBox.setResponder(this::onSearchChanged);
         addRenderableWidget(searchBox);
 
-        // Tab buttons across the top of the right panel
-        int tabX = leftPanelWidth + 4;
-        int tabY = HEADER_HEIGHT + 2;
-        for (DeepModeTab tab : DeepModeTab.values()) {
-            String label = tab.name().substring(0, 1) + tab.name().substring(1).toLowerCase();
-            int tabWidth = font.width(label) + 12;
-            final DeepModeTab thisTab = tab;
-            Button tabBtn = Button.builder(Component.literal(label), btn -> {
-                activeTab = thisTab;
-            }).bounds(tabX, tabY, tabWidth, TAB_HEIGHT).build();
-            addRenderableWidget(tabBtn);
-            tabX += tabWidth + 2;
-        }
+        noteBox = new EditBox(font, leftPanelWidth + 6, height - 40, width - leftPanelWidth - 12, 16,
+                Component.literal("Note"));
+        noteBox.setMaxLength(NoteStore.MAX_NOTE_LENGTH);
+        noteBox.setHint(Component.literal("Write a note and press Enter"));
+        addRenderableWidget(noteBox);
 
-        // Calculate total filter width for manual rendering (filters are drawn manually with scissor clipping)
         totalFilterWidth = 0;
-        for (int i = 0; i < filterLabels.size(); i++) {
-            int fw = font.width(filterLabels.get(i)) + 12;
-            totalFilterWidth += fw + 2;
-        }
+        for (String label : filterLabels) totalFilterWidth += font.width(label) + 14;
 
-        // ? Help button (top-right corner)
-        Button helpBtn = Button.builder(Component.literal("?"), btn -> {
-            showHelp = !showHelp;
-        }).bounds(width - 22, 4, 18, 14).build();
-        addRenderableWidget(helpBtn);
+        addRenderableWidget(Button.builder(Component.literal("?"), btn -> showHelp = !showHelp)
+                .bounds(width - 22, 4, 18, 14).build());
 
-        // Bug report / Mod support button (bottom-right corner)
         String reportLabel = "Report Bug / Request Mod";
         int reportW = font.width(reportLabel) + 12;
-        Button reportBtn = Button.builder(Component.literal(reportLabel), btn -> {
-            Util.getPlatform().openUri(ISSUES_URL);
-        }).bounds(width - reportW - 4, height - 20, reportW, 16).build();
-        addRenderableWidget(reportBtn);
+        addRenderableWidget(Button.builder(Component.literal(reportLabel),
+                        btn -> ConfirmLinkScreen.confirmLinkNow(this, URI.create(ISSUES_URL)))
+                .bounds(width - reportW - 4, height - 20, reportW, 16).build());
 
-        // Calculate grid columns based on available width
         gridColumns = Math.max(1, (leftPanelWidth - 12) / ITEM_SIZE);
+        onSearchChanged(searchBox.getValue());
+    }
 
-        // Initial search (show everything)
-        onSearchChanged("");
+    @Override
+    public void removed() {
+        lastSearch = searchBox != null ? searchBox.getValue() : lastSearch;
+        lastEntry = selectedEntry;
+        lastTab = activeTab;
+        AtlasClient.saveAll();
+        super.removed();
     }
 
     private int panelDividerX() {
@@ -153,35 +182,19 @@ public class AtlasScreen extends Screen {
     }
 
     private void rebuildFilters() {
-        filterOptions = new ArrayList<>();
-        filterLabels = new ArrayList<>();
-        filterOptions.add("");
-        filterLabels.add("All");
-        filterOptions.add("@minecraft");
-        filterLabels.add("Vanilla");
-        filterOptions.add("Saved");
-        filterLabels.add("Saved");
-        var graph = AtlasFabricClient.recipeGraph();
-        if (graph != null) {
-            TreeSet<String> mods = new TreeSet<>();
-            for (var node : graph.allNodes()) {
-                String id = node.id();
-                int colon = id.indexOf(':');
-                if (colon > 0) {
-                    String ns = id.substring(0, colon);
-                    if (!"minecraft".equals(ns)) {
-                        mods.add(ns);
-                    }
-                }
-            }
-            for (String mod : mods) {
-                filterOptions.add("@" + mod);
-                filterLabels.add(mod.substring(0, 1).toUpperCase() + mod.substring(1));
-            }
+        filterOptions = new ArrayList<>(List.of("", "@minecraft", "Saved", "Plans"));
+        filterLabels = new ArrayList<>(List.of("All", "Vanilla", "Saved", "Plans"));
+        TreeSet<String> mods = new TreeSet<>();
+        for (var node : AtlasClient.recipeGraph().allNodes()) {
+            String id = node.id();
+            int colon = id.indexOf(':');
+            if (colon > 0 && !"minecraft".equals(id.substring(0, colon))) mods.add(id.substring(0, colon));
         }
-        if (activeFilter >= filterLabels.size()) {
-            activeFilter = 0;
+        for (String mod : mods) {
+            filterOptions.add("@" + mod);
+            filterLabels.add(ItemStacks.pretty(mod));
         }
+        if (activeFilter >= filterLabels.size()) activeFilter = 0;
     }
 
     private void showFeedback(String message) {
@@ -189,547 +202,1007 @@ public class AtlasScreen extends Screen {
         feedbackExpireTime = System.currentTimeMillis() + 2000;
     }
 
-    private static EntryKey stackToEntry(ItemStack stack) {
-        if (stack.isEmpty()) return null;
-        var key = stack.typeHolder().unwrapKey().orElse(null);
-        if (key == null) return null;
-        return new EntryKey("item", key.identifier().toString());
-    }
-
     private void onSearchChanged(String text) {
-        SearchIndex index = AtlasFabricClient.searchIndex();
-        if (index == null) {
-            searchResults = List.of();
-            return;
-        }
-        // If "Saved" filter is active, filter to saved items only
-        if (activeFilter >= 0 && activeFilter < filterOptions.size() && "Saved".equals(filterOptions.get(activeFilter))) {
-            PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
-            var savedTargets = new java.util.HashSet<EntryKey>();
-            for (var plan : pm.plans()) {
-                savedTargets.add(plan.target());
-            }
-            SearchQuery query = SearchQuery.parse(text);
-            var allResults = index.search(query);
-            searchResults = allResults.stream().filter(savedTargets::contains).toList();
+        SearchIndex index = AtlasClient.searchIndex();
+        SearchQuery query = SearchQuery.parse(text);
+        List<EntryKey> all = index.search(query);
+        String filter = filterOptions.isEmpty() ? "" : filterOptions.get(activeFilter);
+        if ("Saved".equals(filter)) {
+            searchResults = onlyPinned(all, AtlasClient.savedItems());
+        } else if ("Plans".equals(filter)) {
+            searchResults = onlyPinned(all, AtlasClient.buildPlans());
         } else {
-            SearchQuery query = SearchQuery.parse(text);
-            searchResults = index.search(query);
+            searchResults = all;
         }
         scrollOffset = 0;
     }
 
-    @Override
-    public void extractRenderState(GuiGraphicsExtractor gfx, int mouseX, int mouseY, float partialTick) {
-        int dividerX = panelDividerX();
-
-        // Left panel background
-        gfx.fill(0, 0, dividerX, height, PANEL_BG);
-        // Divider line
-        gfx.fill(dividerX, 0, dividerX + 1, height, DIVIDER_COLOR);
-        // Right panel background
-        gfx.fill(dividerX + 1, 0, width, height, PANEL_BG);
-
-        // Header
-        gfx.centeredText(font, Component.literal("Atlas"), width / 2, 8, HEADER_COLOR);
-
-        // Draw item grid in left panel
-        drawItemGrid(gfx, mouseX, mouseY);
-
-        // Draw recipe panel on the right
-        drawRecipePanel(gfx, dividerX + 6, mouseX, mouseY);
-
-        // Feedback toast (visible in-UI)
-        if (feedbackText != null && System.currentTimeMillis() < feedbackExpireTime) {
-            int fbW = font.width(feedbackText) + 12;
-            int fbX = (width - fbW) / 2;
-            int fbY = height - 24;
-            gfx.fill(fbX, fbY, fbX + fbW, fbY + 14, 0xCC222222);
-            gfx.text(font, Component.literal(feedbackText), fbX + 6, fbY + 3, 0xFF88FF88);
-        } else {
-            feedbackText = null;
-        }
-
-        // Help overlay (drawn on top of everything except widgets)
-        if (showHelp) {
-            drawHelpOverlay(gfx);
-        }
-
-        // Let widgets (search box, buttons) render themselves
-        super.extractRenderState(gfx, mouseX, mouseY, partialTick);
-
-        // Filter chips (rendered manually with scissor clipping)
-        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
-        int filterAreaLeft = 6;
-        int filterAreaRight = dividerX - 6;
-        gfx.enableScissor(filterAreaLeft, filterY, filterAreaRight, filterY + 14);
-        int fx = filterAreaLeft - filterScrollOffset;
-        for (int i = 0; i < filterLabels.size(); i++) {
-            String lbl = filterLabels.get(i);
-            int fw = font.width(lbl) + 12;
-            int bgColor = (i == activeFilter) ? 0x883A5A8A : 0x44303030;
-            gfx.fill(fx, filterY, fx + fw, filterY + 14, bgColor);
-            gfx.centeredText(font, Component.literal(lbl), fx + fw / 2, filterY + 3, i == activeFilter ? HEADER_COLOR : 0xFFCCCCCC);
-            fx += fw + 2;
-        }
-        gfx.disableScissor();
-
-        // Scroll indicators for filter row
-        if (filterScrollOffset > 0) {
-            gfx.text(font, Component.literal("\u25C0"), filterAreaLeft - 1, filterY + 3, 0xFF888888);
-        }
-        int maxFilterScroll = Math.max(0, totalFilterWidth - (filterAreaRight - filterAreaLeft));
-        if (filterScrollOffset < maxFilterScroll) {
-            gfx.text(font, Component.literal("\u25B6"), filterAreaRight - 5, filterY + 3, 0xFF888888);
-        }
+    private static List<EntryKey> onlyPinned(List<EntryKey> results, PinnedPlanManager manager) {
+        Set<EntryKey> pinned = new HashSet<>();
+        manager.plans().forEach(p -> pinned.add(p.target()));
+        return results.stream().filter(pinned::contains).toList();
     }
 
-    private void drawItemGrid(GuiGraphicsExtractor gfx, int mouseX, int mouseY) {
-        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24; // below search + filter row
-        int startX = 6;
-        int maxRows = (height - startY - 4) / ITEM_SIZE;
-        int visibleItems = gridColumns * maxRows;
+    // -- Selection -------------------------------------------------------------
 
-        // Scissor to the left panel
-        gfx.enableScissor(0, startY, panelDividerX(), height);
-
-        for (int i = 0; i < visibleItems && (i + scrollOffset * gridColumns) < searchResults.size(); i++) {
-            int idx = i + scrollOffset * gridColumns;
-            EntryKey entry = searchResults.get(idx);
-
-            int col = i % gridColumns;
-            int row = i / gridColumns;
-            int x = startX + col * ITEM_SIZE;
-            int y = startY + row * ITEM_SIZE;
-
-            // Highlight selected
-            if (entry.equals(selectedEntry)) {
-                gfx.fill(x - 1, y - 1, x + ITEM_SIZE - 1, y + ITEM_SIZE - 1, HIGHLIGHT_COLOR);
-            }
-
-            // Pin indicator (small yellow dot, top-right corner)
-            if (AtlasFabricClient.pinnedPlanManager().isPinned(entry)) {
-                gfx.fill(x + ITEM_SIZE - 5, y, x + ITEM_SIZE - 2, y + 3, 0xFFFFCC44);
-            }
-
-            // Render item icon
-            ItemStack stack = entryToStack(entry);
-            if (!stack.isEmpty()) {
-                gfx.item(stack, x, y);
-            }
-
-            // Tooltip on hover
-            if (mouseX >= x && mouseX < x + ITEM_SIZE && mouseY >= y && mouseY < y + ITEM_SIZE) {
-                if (!stack.isEmpty()) {
-                    gfx.setTooltipForNextFrame(font, stack, mouseX, mouseY);
-                }
-            }
+    private void select(EntryKey entry, boolean remember) {
+        if (entry == null) return;
+        if (remember && selectedEntry != null && !selectedEntry.equals(entry)) {
+            history.push(selectedEntry);
+            while (history.size() > 50) history.removeLast();
         }
-
-        gfx.disableScissor();
+        selectedEntry = entry;
+        selectedRecipes = AtlasClient.recipeGraph().recipesFor(entry);
+        selectedUses = findUses(entry);
+        rightScroll = 0;
+        collapsed.clear();
+        cachedPlan = null;
+        int pinnedCount = AtlasClient.buildPlans().count(entry);
+        treeCount = pinnedCount > 0 ? pinnedCount : 1;
     }
 
-    private void drawRecipePanel(GuiGraphicsExtractor gfx, int startX, int mouseX, int mouseY) {
-        recipeHitBoxes.clear();
-        int startY = HEADER_HEIGHT + TAB_HEIGHT + 8;
-
-        if (selectedEntry == null) {
-            gfx.text(font, Component.literal("Select an item to view recipes"), startX, startY, TEXT_COLOR);
-            return;
-        }
-
-        // Show selected item name + pin button
-        ItemStack stack = entryToStack(selectedEntry);
-        if (!stack.isEmpty()) {
-            gfx.item(stack, startX, startY);
-            gfx.text(font, stack.getHoverName(), startX + 20, startY + 4, HEADER_COLOR);
-        }
-
-        // Save button next to item name
-        PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
-        boolean pinned = pm.isPinned(selectedEntry);
-        String pinLabel = pinned ? "Unsave" : "Save";
-        int pinW = font.width(pinLabel) + 8;
-        int pinX = width - pinW - 8;
-        int pinY = startY + 2;
-        int pinBg = pinned ? 0x88885533 : 0x66404060;
-        gfx.fill(pinX, pinY, pinX + pinW, pinY + 14, pinBg);
-        gfx.text(font, Component.literal(pinLabel), pinX + 4, pinY + 3,
-                pinned ? 0xFFFFCC44 : 0xFFAAAAFF);
-
-        startY += 24;
-
-        // Tab-specific content
-        switch (activeTab) {
-            case CRAFT -> drawCraftTab(gfx, startX, startY, mouseX, mouseY);
-            case USE -> drawUseTab(gfx, startX, startY, mouseX, mouseY);
-            case SOURCES -> drawSourcesTab(gfx, startX, startY);
-            default -> gfx.text(font, Component.literal(activeTab.name() + " - Coming soon"),
-                    startX, startY, TEXT_COLOR);
-        }
+    private void navigate(EntryKey entry) {
+        select(entry, true);
+        LOGGER.debug("[Atlas] Navigated to {}", entry.id());
     }
 
-    private static final int GRID_SLOT = 18;
-
-    private void drawCraftTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
-        if (selectedRecipes.isEmpty()) {
-            gfx.text(font, Component.literal("No recipes found"), x, y, TEXT_COLOR);
-            return;
-        }
-
-        for (RecipeNode recipe : selectedRecipes) {
-            if (y > height - 20) break;
-
-            String label = categoryLabel(recipe.categoryId());
-            var inputs = recipe.inputs();
-            var outputs = recipe.outputs();
-            boolean isCrafting = recipe.categoryId().equals("minecraft:crafting");
-
-            // Category label
-            gfx.text(font, Component.literal(label), x, y, 0xFF8888FF);
-            y += 12;
-
-            if (isCrafting) {
-                // ── Always render a full 3x3 crafting grid ──
-                int gw = recipe.gridWidth();
-                int gh = recipe.gridHeight();
-                int gridPixelSize = 3 * GRID_SLOT;
-
-                for (int row = 0; row < 3; row++) {
-                    for (int col = 0; col < 3; col++) {
-                        int sx = x + col * GRID_SLOT;
-                        int sy = y + row * GRID_SLOT;
-                        gfx.fill(sx, sy, sx + GRID_SLOT - 1, sy + GRID_SLOT - 1, 0x44FFFFFF);
-
-                        IngredientKey ingredient = getGridIngredient(inputs, gw, gh, row, col);
-                        if (ingredient != null && !ingredient.isEmpty()) {
-                            ItemStack inputStack = ingredientToStack(ingredient);
-                            if (!inputStack.isEmpty()) {
-                                gfx.item(inputStack, sx, sy);
-                                EntryKey entry = stackToEntry(inputStack);
-                                if (entry != null) {
-                                    recipeHitBoxes.add(new ItemHitBox(sx, sy, GRID_SLOT, GRID_SLOT, entry, inputStack));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Arrow and output centered vertically next to the 3x3 grid
-                int arrowX = x + gridPixelSize + 4;
-                int centerY = y + gridPixelSize / 2 - 4;
-                gfx.text(font, Component.literal("\u2192"), arrowX, centerY, TEXT_COLOR);
-
-                int outX = arrowX + 14;
-                int outY = y + gridPixelSize / 2 - GRID_SLOT / 2;
-                for (var output : outputs) {
-                    ItemStack outputStack = entryToStack(output);
-                    if (!outputStack.isEmpty()) {
-                        gfx.item(outputStack, outX, outY);
-                        EntryKey entry = stackToEntry(outputStack);
-                        if (entry != null) {
-                            recipeHitBoxes.add(new ItemHitBox(outX, outY, GRID_SLOT, GRID_SLOT, entry, outputStack));
-                        }
-                        outX += GRID_SLOT;
-                    }
-                }
-                y += gridPixelSize + 4;
-            } else {
-                // ── Non-crafting: compact input → output row ──
-                int inputX = x;
-                for (var input : inputs) {
-                    if (input.isEmpty()) continue;
-                    ItemStack inputStack = ingredientToStack(input);
-                    if (!inputStack.isEmpty()) {
-                        gfx.item(inputStack, inputX, y);
-                        EntryKey entry = stackToEntry(inputStack);
-                        if (entry != null) {
-                            recipeHitBoxes.add(new ItemHitBox(inputX, y, GRID_SLOT, GRID_SLOT, entry, inputStack));
-                        }
-                        inputX += GRID_SLOT;
-                    }
-                }
-                gfx.text(font, Component.literal("\u2192"), inputX + 4, y + 4, TEXT_COLOR);
-                inputX += 14;
-                for (var output : outputs) {
-                    ItemStack outputStack = entryToStack(output);
-                    if (!outputStack.isEmpty()) {
-                        gfx.item(outputStack, inputX, y);
-                        EntryKey entry = stackToEntry(outputStack);
-                        if (entry != null) {
-                            recipeHitBoxes.add(new ItemHitBox(inputX, y, GRID_SLOT, GRID_SLOT, entry, outputStack));
-                        }
-                        inputX += GRID_SLOT;
-                    }
-                }
-                y += GRID_SLOT + 4;
-            }
-
-            // Processing time if present
-            if (recipe.processingTime() > 0) {
-                gfx.text(font, Component.literal("  Time: " + recipe.processingTime() + " ticks"),
-                        x, y, 0xFF888888);
-                y += 10;
-            }
-
-            y += 4;
-        }
-
-        // Tooltip for recipe items on hover
-        for (var hitBox : recipeHitBoxes) {
-            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
-                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
-                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
-                break;
-            }
-        }
+    private void goBack() {
+        if (history.isEmpty()) return;
+        EntryKey previous = history.pop();
+        select(previous, false);
     }
 
-    /**
-     * Returns the ingredient for a position in a 3x3 crafting grid.
-     * For shaped recipes (gw x gh), the recipe is placed top-left.
-     * For shapeless (gw == 0), items fill left-to-right, top-to-bottom.
-     */
-    private static IngredientKey getGridIngredient(List<IngredientKey> inputs, int gw, int gh, int row, int col) {
-        if (gw > 0 && gh > 0) {
-            if (col < gw && row < gh) {
-                int idx = row * gw + col;
-                return idx < inputs.size() ? inputs.get(idx) : IngredientKey.EMPTY;
-            }
-            return IngredientKey.EMPTY;
-        }
-        int idx = row * 3 + col;
-        return idx < inputs.size() ? inputs.get(idx) : IngredientKey.EMPTY;
-    }
-
-    private static String categoryLabel(String categoryId) {
-        return switch (categoryId) {
-            case "minecraft:crafting"     -> "Crafting";
-            case "minecraft:smelting"     -> "Smelting";
-            case "minecraft:blasting"     -> "Blasting";
-            case "minecraft:smoking"      -> "Smoking";
-            case "minecraft:campfire"     -> "Campfire";
-            case "minecraft:stonecutting" -> "Stonecutting";
-            case "minecraft:smithing"     -> "Smithing";
-            default -> {
-                String raw = categoryId.contains(":") ? categoryId.substring(categoryId.indexOf(':') + 1) : categoryId;
-                yield raw.substring(0, 1).toUpperCase() + raw.substring(1).replace('_', ' ');
-            }
-        };
-    }
-
-    private void drawUseTab(GuiGraphicsExtractor gfx, int x, int y, int mouseX, int mouseY) {
-        if (selectedEntry == null) return;
-
-        // Find recipes that use this item as an input
-        RecipeGraph graph = AtlasApi.get().recipeGraph();
+    private static List<RecipeNode> findUses(EntryKey entry) {
+        var tags = AtlasClient.tags();
         List<RecipeNode> uses = new ArrayList<>();
-        for (RecipeNode node : graph.allNodes()) {
-            for (var input : node.inputs()) {
-                if (input.id().equals(selectedEntry.id())) {
+        for (RecipeNode node : AtlasClient.recipeGraph().allNodes()) {
+            for (IngredientKey input : node.ingredientCounts().keySet()) {
+                if (tags.matches(input, entry.id())) {
                     uses.add(node);
                     break;
                 }
             }
         }
+        return uses;
+    }
 
-        if (uses.isEmpty()) {
-            gfx.text(font, Component.literal("No uses found"), x, y, TEXT_COLOR);
-            return;
+    // -- Rendering -------------------------------------------------------------
+
+    @Override
+    public void extractRenderState(GuiGraphicsExtractor gfx, int mouseX, int mouseY, float partialTick) {
+        int dividerX = panelDividerX();
+        ui.begin(this::navigate);
+
+        gfx.fill(0, 0, dividerX, height, PANEL_BG);
+        gfx.fill(dividerX, 0, dividerX + 1, height, DIVIDER_COLOR);
+        gfx.fill(dividerX + 1, 0, width, height, PANEL_BG);
+        gfx.centeredText(font, Component.literal("Atlas"), width / 2, 8, Ui.HEADER);
+
+        int plansCount = AtlasClient.buildPlans().plans().size();
+        String plansLabel = "Plans" + (plansCount > 0 ? " (" + plansCount + ")" : "");
+        ui.button(gfx, font, plansLabel, width - 30 - font.width(plansLabel) - 8, 5, showPlans, mouseX, mouseY,
+                () -> {
+                    showPlans = !showPlans;
+                    rightScroll = 0;
+                });
+
+        drawItemGrid(gfx, mouseX, mouseY);
+
+        noteBox.setVisible(!showPlans && selectedEntry != null && activeTab == DeepModeTab.NOTES);
+        if (showPlans) {
+            drawPlansPanel(gfx, dividerX + 6, mouseX, mouseY);
+        } else {
+            drawRecipePanel(gfx, dividerX + 6, mouseX, mouseY);
         }
 
-        gfx.text(font, Component.literal("Used in " + uses.size() + " recipes:"), x, y, TEXT_COLOR);
-        y += 14;
+        if (feedbackText != null && System.currentTimeMillis() < feedbackExpireTime) {
+            int fbW = font.width(feedbackText) + 12;
+            int fbX = (width - fbW) / 2;
+            int fbY = height - 24;
+            gfx.fill(fbX, fbY, fbX + fbW, fbY + 14, 0xCC222222);
+            gfx.text(font, feedbackText, fbX + 6, fbY + 3, 0xFF88FF88);
+        } else {
+            feedbackText = null;
+        }
 
-        for (RecipeNode recipe : uses) {
-            if (y > height - 20) break; // stop if we run out of space
+        super.extractRenderState(gfx, mouseX, mouseY, partialTick);
+        drawFilterChips(gfx, dividerX);
 
-            gfx.text(font, Component.literal("[" + recipe.categoryId() + "] " + recipe.id()),
-                    x, y, 0xFF8888FF);
-            y += 12;
+        if (showHelp) {
+            drawHelpOverlay(gfx);
+        } else {
+            ui.tooltips(gfx, font, mouseX, mouseY);
+        }
+    }
 
-            // Show outputs
-            int outX = x + 10;
-            for (var output : recipe.outputs()) {
-                ItemStack outStack = entryToStack(output);
-                if (!outStack.isEmpty()) {
-                    gfx.item(outStack, outX, y);
-                    EntryKey entry = stackToEntry(outStack);
-                    if (entry != null) {
-                        recipeHitBoxes.add(new ItemHitBox(outX, y, ITEM_SIZE, ITEM_SIZE, entry, outStack));
-                    }
-                    outX += ITEM_SIZE;
+    private void drawFilterChips(GuiGraphicsExtractor gfx, int dividerX) {
+        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
+        int left = 6;
+        int right = dividerX - 6;
+        gfx.enableScissor(left, filterY, right, filterY + 14);
+        int fx = left - filterScrollOffset;
+        for (int i = 0; i < filterLabels.size(); i++) {
+            String label = filterLabels.get(i);
+            int fw = font.width(label) + 12;
+            int bg = (i == activeFilter) ? Ui.CHIP_ACTIVE : 0x44303030;
+            gfx.fill(fx, filterY, fx + fw, filterY + 14, bg);
+            gfx.centeredText(font, Component.literal(label), fx + fw / 2, filterY + 3,
+                    i == activeFilter ? Ui.HEADER : Ui.TEXT);
+            int visibleLeft = Math.max(left, fx);
+            int visibleRight = Math.min(right, fx + fw);
+            if (visibleRight > visibleLeft) {
+                final int index = i;
+                ui.area(visibleLeft, filterY, visibleRight - visibleLeft, 14, () -> {
+                    activeFilter = index;
+                    applyFilter();
+                });
+            }
+            fx += fw + 2;
+        }
+        gfx.disableScissor();
+
+        if (filterScrollOffset > 0) {
+            gfx.text(font, "◀", left - 1, filterY + 3, Ui.MUTED);
+        }
+        int maxFilterScroll = Math.max(0, totalFilterWidth - (right - left));
+        if (filterScrollOffset < maxFilterScroll) {
+            gfx.text(font, "▶", right - 5, filterY + 3, Ui.MUTED);
+        }
+    }
+
+    private int gridTop() {
+        return HEADER_HEIGHT + SEARCH_HEIGHT + 24;
+    }
+
+    private void drawItemGrid(GuiGraphicsExtractor gfx, int mouseX, int mouseY) {
+        int startY = gridTop();
+        int startX = 6;
+        int maxRows = (height - startY - 4) / ITEM_SIZE;
+        int visibleItems = gridColumns * maxRows;
+        PinnedPlanManager saved = AtlasClient.savedItems();
+        PinnedPlanManager plans = AtlasClient.buildPlans();
+
+        gfx.enableScissor(0, startY, panelDividerX(), height);
+        for (int i = 0; i < visibleItems && (i + scrollOffset * gridColumns) < searchResults.size(); i++) {
+            EntryKey entry = searchResults.get(i + scrollOffset * gridColumns);
+            int x = startX + (i % gridColumns) * ITEM_SIZE;
+            int y = startY + (i / gridColumns) * ITEM_SIZE;
+
+            if (entry.equals(selectedEntry)) {
+                gfx.fill(x - 1, y - 1, x + ITEM_SIZE - 1, y + ITEM_SIZE - 1, HIGHLIGHT_COLOR);
+            }
+            // Saved items get a yellow corner, build plans a cyan one
+            if (saved.isPinned(entry)) gfx.fill(x + ITEM_SIZE - 5, y, x + ITEM_SIZE - 2, y + 3, 0xFFFFCC44);
+            if (plans.isPinned(entry)) gfx.fill(x, y, x + 3, y + 3, 0xFF44CCFF);
+
+            ItemStack stack = ItemStacks.of(entry);
+            if (!stack.isEmpty()) {
+                gfx.item(stack, x, y);
+                if (mouseX >= x && mouseX < x + ITEM_SIZE && mouseY >= y && mouseY < y + ITEM_SIZE && !showHelp) {
+                    gfx.setTooltipForNextFrame(font, stack, mouseX, mouseY);
                 }
             }
-            y += ITEM_SIZE + 4;
         }
+        gfx.disableScissor();
 
-        // Tooltip for recipe items on hover
-        for (var hitBox : recipeHitBoxes) {
-            if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
-                    && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
-                gfx.setTooltipForNextFrame(font, hitBox.stack, mouseX, mouseY);
-                break;
-            }
+        if (searchResults.isEmpty()) {
+            gfx.text(font, AtlasClient.searchIndex().size() == 0 ? "Join a world to load items" : "No items match",
+                    startX, startY + 4, Ui.MUTED);
         }
     }
 
-    private void drawSourcesTab(GuiGraphicsExtractor gfx, int x, int y) {
-        if (selectedRecipes.isEmpty()) {
-            gfx.text(font, Component.literal("No sources found"), x, y, TEXT_COLOR);
+    private void drawRecipePanel(GuiGraphicsExtractor gfx, int startX, int mouseX, int mouseY) {
+        int right = width - 6;
+        int tabY = HEADER_HEIGHT + 2;
+        int tabX = startX;
+        for (DeepModeTab tab : DeepModeTab.values()) {
+            int w = font.width(tab.label()) + 8;
+            if (tabX + w > right) {
+                tabX = startX;
+                tabY += TAB_HEIGHT + 2;
+            }
+            ui.button(gfx, font, tab.label(), tabX, tabY, tab == activeTab, mouseX, mouseY, () -> {
+                activeTab = tab;
+                rightScroll = 0;
+            });
+            tabX += w + 2;
+        }
+        int y = tabY + TAB_HEIGHT + 6;
+
+        if (selectedEntry == null) {
+            gfx.text(font, "Select an item to view recipes", startX, y, Ui.TEXT);
             return;
         }
 
-        gfx.text(font, Component.literal("All sources (" + selectedRecipes.size() + "):"), x, y, TEXT_COLOR);
-        y += 14;
+        // Item header: back button, icon, name and the save/plan buttons
+        int headerX = startX;
+        if (!history.isEmpty()) {
+            headerX += ui.button(gfx, font, "<", startX, y + 2, false, mouseX, mouseY, this::goBack) + 4;
+        }
+        ItemStack stack = ItemStacks.of(selectedEntry);
+        if (!stack.isEmpty()) {
+            gfx.item(stack, headerX, y);
+            ui.tooltip(headerX, y, 16, 16, List.of(stack.getHoverName()));
+        }
+        PinnedPlanManager saved = AtlasClient.savedItems();
+        boolean isSaved = saved.isPinned(selectedEntry);
+        String saveLabel = isSaved ? "Unsave" : "Save";
+        int saveX = right - font.width(saveLabel) - 8;
+        ui.button(gfx, font, saveLabel, saveX, y + 2, isSaved ? 0x88885533 : Ui.CHIP,
+                isSaved ? 0xFFFFCC44 : 0xFFAAAAFF, mouseX, mouseY, () -> toggle(saved, selectedEntry, 1));
+        String name = stack.isEmpty() ? selectedEntry.id() : stack.getHoverName().getString();
+        gfx.text(font, Ui.fit(font, name, saveX - headerX - 26), headerX + 20, y + 4, Ui.HEADER);
+        y += 22;
+
+        contentTop = y;
+        contentBottom = activeTab == DeepModeTab.NOTES ? height - 44 : height - 24;
+        gfx.enableScissor(startX - 2, contentTop, width, contentBottom);
+        ui.clip(contentTop, contentBottom);
+        int contentStart = contentTop - rightScroll;
+        int end = switch (activeTab) {
+            case CRAFT -> drawCraftTab(gfx, startX, contentStart, right, mouseX, mouseY);
+            case USE -> drawUseTab(gfx, startX, contentStart, right, mouseX, mouseY);
+            case SOURCES -> drawSourcesTab(gfx, startX, contentStart, right, mouseX, mouseY);
+            case TREE -> drawTreeTab(gfx, startX, contentStart, right, mouseX, mouseY);
+            case ALTERNATIVES -> drawAlternativesTab(gfx, startX, contentStart, right, mouseX, mouseY);
+            case UNLOCKS -> drawUnlocksTab(gfx, startX, contentStart, right);
+            case NOTES -> drawNotesTab(gfx, startX, contentStart, right, mouseX, mouseY);
+        };
+        ui.unclip();
+        gfx.disableScissor();
+        contentHeight = end - contentStart;
+        drawScrollBar(gfx);
+    }
+
+    private void drawScrollBar(GuiGraphicsExtractor gfx) {
+        int view = contentBottom - contentTop;
+        if (contentHeight <= view) {
+            rightScroll = 0;
+            return;
+        }
+        rightScroll = Math.min(rightScroll, contentHeight - view);
+        int barH = Math.max(10, view * view / contentHeight);
+        int barY = contentTop + (view - barH) * rightScroll / (contentHeight - view);
+        gfx.fill(width - 3, contentTop, width - 1, contentBottom, 0x33FFFFFF);
+        gfx.fill(width - 3, barY, width - 1, barY + barH, 0xAAAAAACC);
+    }
+
+    private static void toggle(PinnedPlanManager manager, EntryKey entry, int count) {
+        if (manager.isPinned(entry)) {
+            manager.unpin(entry);
+        } else {
+            manager.pin(entry, count);
+        }
+        AtlasClient.saveAll();
+    }
+
+    // -- Text helpers ----------------------------------------------------------
+
+    private int heading(GuiGraphicsExtractor gfx, String text, int x, int y) {
+        gfx.text(font, text, x, y, Ui.ACCENT);
+        return y + LINE + 1;
+    }
+
+    private int wrapped(GuiGraphicsExtractor gfx, String text, int x, int y, int width, int color) {
+        for (var line : font.split(FormattedText.of(text), Math.max(20, width))) {
+            gfx.text(font, line, x, y, color);
+            y += LINE - 1;
+        }
+        return y;
+    }
+
+    /** A small colored square used as a status marker. */
+    private static void dot(GuiGraphicsExtractor gfx, int x, int y, int color) {
+        gfx.fill(x, y + 2, x + 5, y + 7, color);
+    }
+
+    // -- Craft tab -------------------------------------------------------------
+
+    private int drawCraftTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        if (selectedRecipes.isEmpty()) {
+            y = wrapped(gfx, "No recipe makes this item. Check the Sources tab for other ways to get it.",
+                    x, y, right - x, Ui.TEXT);
+            return y;
+        }
+        ContextSnapshot ctx = AtlasClient.context().snapshot();
+        var insights = AtlasClient.insights();
+        Map<String, AlternativeResolver.RankedRecipe> ranking = new LinkedHashMap<>();
+        for (var ranked : insights.alternatives().rankRecipes(selectedEntry, null)) {
+            ranking.put(ranked.recipe().id(), ranked);
+        }
 
         for (RecipeNode recipe : selectedRecipes) {
-            if (y > height - 20) break;
-            String source = recipe.categoryId().replace("minecraft:", "").replace("atlas:", "");
-            gfx.text(font, Component.literal("  " + source + " - " + recipe.id()),
-                    x, y, 0xFFAAAAFF);
-            y += 12;
+            int lx = x;
+            gfx.text(font, RecipeView.categoryName(recipe.categoryId()), lx, y, 0xFF8888FF);
+            lx += font.width(RecipeView.categoryName(recipe.categoryId())) + 6;
+            var ranked = ranking.get(recipe.id());
+            if (ranked != null) {
+                if (ranked.marks().contains(AlternativeResolver.Mark.CHEAPEST)) {
+                    gfx.text(font, "cheapest", lx, y, Ui.GOOD);
+                    lx += font.width("cheapest") + 6;
+                }
+                if (ranked.marks().contains(AlternativeResolver.Mark.SIMPLEST)) {
+                    gfx.text(font, "simplest", lx, y, 0xFF88CCFF);
+                }
+            }
+            y += LINE + 1;
+            y += RecipeView.draw(ui, gfx, font, recipe, x, y, 18, right - x) + 3;
+
+            if (recipe.processingTime() > 0) {
+                gfx.text(font, "Time: " + recipe.processingTime() / 20.0 + "s", x, y, Ui.MUTED);
+                y += LINE - 1;
+            }
+            y = drawStatus(gfx, insights.availability().evaluateFully(recipe, ctx), x, y, right - x);
+            y += 8;
         }
+        return y;
     }
 
-    // ── Filter + Help ──────────────────────────────────────────────────
+    /** One line per problem, or a single green "Ready to craft". */
+    private int drawStatus(GuiGraphicsExtractor gfx, AvailabilityResult result, int x, int y, int width) {
+        if (result.craftableNow()) {
+            dot(gfx, x, y, Ui.GOOD);
+            gfx.text(font, "Ready to craft", x + 8, y, Ui.GOOD);
+            return y + LINE;
+        }
+        for (Blocker blocker : result.details()) {
+            if (blocker.kind() == BlockerKind.MATERIALS) continue;
+            dot(gfx, x, y, Ui.BAD);
+            y = wrapped(gfx, blocker.message(), x + 8, y, width - 8, Ui.BAD);
+        }
+        var missing = result.missingMaterials();
+        if (!missing.isEmpty()) {
+            StringBuilder text = new StringBuilder("Missing: ");
+            for (int i = 0; i < missing.size(); i++) {
+                Blocker m = missing.get(i);
+                if (i > 0) text.append(", ");
+                text.append(m.amount()).append("x ").append(ItemStacks.name(m.subject()));
+            }
+            dot(gfx, x, y, Ui.WARN);
+            y = wrapped(gfx, text.toString(), x + 8, y, width - 8, Ui.WARN);
+        }
+        return y;
+    }
 
-    private void applyFilter() {
-        String filterValue = activeFilter > 0 ? filterOptions.get(activeFilter) : "";
-        if ("Saved".equals(filterValue)) {
-            String current = searchBox.getValue().replaceAll("@\\S+\\s*", "").trim();
-            searchBox.setValue(current);
+    // -- Uses tab --------------------------------------------------------------
+
+    private int drawUseTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        // Machines list the categories they run
+        List<RecipeCategory> runs = AtlasApi.get().categories().values().stream()
+                .filter(c -> c.stations().contains(selectedEntry.id()))
+                .sorted(Comparator.comparingInt(RecipeCategory::order))
+                .toList();
+        if (!runs.isEmpty()) {
+            y = heading(gfx, "Workstation for", x, y);
+            for (RecipeCategory category : runs) {
+                long count = AtlasClient.recipeGraph().allNodes().stream()
+                        .filter(n -> n.categoryId().equals(category.id())).count();
+                gfx.text(font, category.name() + " (" + count + " recipes)", x + 4, y, Ui.TEXT);
+                y += LINE;
+            }
+            y += 6;
+        }
+
+        if (selectedUses.isEmpty()) {
+            gfx.text(font, "Not used in any recipe", x, y, Ui.TEXT);
+            return y + LINE;
+        }
+
+        y = heading(gfx, "Used in " + selectedUses.size() + " recipes", x, y);
+        int shown = 0;
+        for (RecipeNode recipe : selectedUses) {
+            if (shown++ >= MAX_USES) {
+                gfx.text(font, "and " + (selectedUses.size() - MAX_USES) + " more", x, y, Ui.MUTED);
+                y += LINE;
+                break;
+            }
+            gfx.text(font, RecipeView.categoryName(recipe.categoryId()), x, y, Ui.MUTED);
+            y += LINE - 1;
+            y += RecipeView.draw(ui, gfx, font, recipe, x, y, 16, right - x) + 6;
+        }
+        return y;
+    }
+
+    // -- Sources tab -----------------------------------------------------------
+
+    private int drawSourcesTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        y = heading(gfx, "How to get it", x, y);
+
+        Map<String, Integer> perCategory = new LinkedHashMap<>();
+        for (RecipeNode recipe : selectedRecipes) perCategory.merge(recipe.categoryId(), 1, Integer::sum);
+        for (var entry : perCategory.entrySet()) {
+            var category = AtlasApi.get().categoryById(entry.getKey());
+            String icon = category.map(RecipeCategory::icon).orElse(null);
+            if (icon != null) ui.item(gfx, font, ItemStacks.of(icon), x, y, null);
+            String label = RecipeView.categoryName(entry.getKey()) + ": " + entry.getValue()
+                    + (entry.getValue() == 1 ? " recipe" : " recipes");
+            gfx.text(font, label, x + 20, y + 4, Ui.TEXT);
+            ui.area(x + 20, y, font.width(label), 16, () -> activeTab = DeepModeTab.CRAFT);
+            y += 18;
+        }
+
+        List<AcquisitionSource> sources = new ArrayList<>(AtlasApi.get().sourcesFor(selectedEntry.id()));
+        selectedRecipes.forEach(r -> sources.addAll(r.sources()));
+        for (AcquisitionSource source : sources) {
+            gfx.text(font, ItemStacks.pretty(source.type().name().toLowerCase(Locale.ROOT)), x, y, Ui.ACCENT);
+            y += LINE;
+            if (source.description() != null && !source.description().isEmpty()) {
+                y = wrapped(gfx, source.description(), x + 6, y, right - x - 6, Ui.TEXT);
+            }
+            if (source.detail() != null && !source.detail().isEmpty()) {
+                y = wrapped(gfx, source.detail(), x + 6, y, right - x - 6, Ui.MUTED);
+            }
+            y += 3;
+        }
+
+        if (perCategory.isEmpty() && sources.isEmpty()) {
+            y = wrapped(gfx, "No recipe makes this. It has to be found in the world, dropped by a mob, "
+                    + "traded or fished.", x, y, right - x, Ui.TEXT);
+        }
+
+        y += 6;
+        if (!selectedUses.isEmpty()) {
+            String uses = "Used in " + selectedUses.size() + " recipes";
+            ui.button(gfx, font, uses, x, y, false, mouseX, mouseY, () -> activeTab = DeepModeTab.USE);
+            y += 16;
+        }
+        return y;
+    }
+
+    // -- Tree tab --------------------------------------------------------------
+
+    private CraftingPlan currentPlan() {
+        String key = selectedEntry.id() + "|" + treeCount;
+        long now = System.currentTimeMillis();
+        if (cachedPlan == null || !key.equals(cachedPlanKey) || now - cachedPlanTime > 1000) {
+            cachedPlan = AtlasClient.insights().plan(selectedEntry, treeCount);
+            cachedPlanKey = key;
+            cachedPlanTime = now;
+        }
+        return cachedPlan;
+    }
+
+    private int drawTreeTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        gfx.text(font, "Amount", x, y + 2, Ui.TEXT);
+        int bx = x + font.width("Amount") + 6;
+        bx += ui.button(gfx, font, "-", bx, y, false, mouseX, mouseY, () -> treeCount = Math.max(1, treeCount - 1)) + 2;
+        String count = String.valueOf(treeCount);
+        gfx.text(font, count, bx + 2, y + 2, Ui.HEADER);
+        bx += font.width(count) + 6;
+        bx += ui.button(gfx, font, "+", bx, y, false, mouseX, mouseY, () -> treeCount = Math.min(999, treeCount + 1)) + 2;
+        bx += ui.button(gfx, font, "x8", bx, y, false, mouseX, mouseY, () -> treeCount = Math.min(999, treeCount * 8)) + 8;
+
+        PinnedPlanManager plans = AtlasClient.buildPlans();
+        boolean pinned = plans.isPinned(selectedEntry);
+        boolean sameCount = plans.count(selectedEntry) == treeCount;
+        String pinLabel = !pinned ? "Pin plan" : sameCount ? "Unpin plan" : "Update plan";
+        ui.button(gfx, font, pinLabel, bx, y, pinned, mouseX, mouseY, () -> {
+            if (pinned && sameCount) {
+                plans.unpin(selectedEntry);
+                showFeedback("Plan removed");
+            } else {
+                plans.pin(selectedEntry, treeCount);
+                showFeedback("Plan pinned, it shows up next to your inventory");
+            }
+            AtlasClient.saveAll();
+        });
+        y += 18;
+
+        CraftingPlan plan = currentPlan();
+        if (plan.done()) {
+            dot(gfx, x, y, Ui.GOOD);
+            gfx.text(font, "You already have " + treeCount + ".", x + 8, y, Ui.GOOD);
+            y += LINE + 4;
+        }
+        if (plan.root().status() == CraftingPlan.Status.RAW) {
+            return wrapped(gfx, "No recipe. This has to be found or farmed.", x, y, right - x, Ui.TEXT);
+        }
+
+        y = drawTreeNode(gfx, plan.root(), x, y, right, 0, "", mouseX, mouseY);
+        if (plan.hasCycle()) {
+            y = wrapped(gfx, "Some branches loop back into themselves (like ingots and blocks) "
+                    + "and stop there.", x, y + 2, right - x, Ui.MUTED);
+        }
+
+        y += 8;
+        y = heading(gfx, "Materials", x, y);
+        List<CraftingPlan.Material> materials = new ArrayList<>(plan.materials());
+        materials.sort(Comparator.comparingInt(CraftingPlan.Material::missing).reversed());
+        for (var material : materials) {
+            ui.item(gfx, font, ItemStacks.of(material.item()), x, y, null);
+            String text = material.needed() + "x " + ItemStacks.name(material.item().id());
+            gfx.text(font, Ui.fit(font, text, right - x - 90), x + 20, y + 4, Ui.TEXT);
+            String state = material.missing() == 0 ? "have all" : "have " + material.have() + ", need " + material.missing();
+            int stateW = font.width(state);
+            gfx.text(font, state, right - stateW - 4, y + 4, material.missing() == 0 ? Ui.GOOD : Ui.WARN);
+            y += 18;
+        }
+
+        if (!plan.steps().isEmpty()) {
+            y += 6;
+            y = heading(gfx, "Steps", x, y);
+            int n = 1;
+            for (var step : plan.steps()) {
+                ui.item(gfx, font, ItemStacks.of(step.item()), x + 14, y, null);
+                gfx.text(font, n++ + ".", x, y + 4, Ui.MUTED);
+                String text = step.produced() + "x " + ItemStacks.name(step.item().id()) + "  "
+                        + RecipeView.categoryName(step.recipe().categoryId())
+                        + (step.crafts() > 1 ? ", " + step.crafts() + " times" : "");
+                gfx.text(font, Ui.fit(font, text, right - x - 40), x + 34, y + 4, Ui.TEXT);
+                y += 18;
+            }
+        }
+        return y;
+    }
+
+    private int drawTreeNode(GuiGraphicsExtractor gfx, CraftingPlan.Node node, int left, int y, int right,
+                             int depth, String path, int mouseX, int mouseY) {
+        int x = left + depth * 12;
+        String key = path + "/" + node.item().id();
+        // Far below the view: only measure, drawing hundreds of hidden items is wasted work
+        if (y > contentBottom + 200) return y + treeHeight(node, key);
+        boolean hasChildren = !node.children().isEmpty();
+        boolean isCollapsed = collapsed.contains(key);
+
+        if (depth > 0) gfx.fill(x - 7, y + 8, x - 2, y + 9, 0x66AAAAAA);
+        if (hasChildren) {
+            String arrow = isCollapsed ? "+" : "-";
+            gfx.text(font, arrow, x, y + 4, Ui.MUTED);
+            ui.area(x - 1, y, 8, 16, () -> {
+                if (!collapsed.remove(key)) collapsed.add(key);
+            });
+        }
+        ui.item(gfx, font, ItemStacks.of(node.item()), x + 8, y, null);
+
+        String name = node.needed() + "x " + ItemStacks.name(node.item().id());
+        String state;
+        int color;
+        switch (node.status()) {
+            case HAVE -> { state = "have"; color = Ui.GOOD; }
+            case RAW -> {
+                state = node.missing() == 0 ? "have" : "gather " + node.missing();
+                color = node.missing() == 0 ? Ui.GOOD : Ui.WARN;
+            }
+            case CRAFT -> {
+                state = "craft " + node.crafts() + "x, " + RecipeView.categoryName(node.recipe().categoryId())
+                        + (node.fromInventory() > 0 ? ", have " + node.fromInventory() : "");
+                color = 0xFF88CCFF;
+            }
+            case CYCLE -> { state = "loops back"; color = Ui.BAD; }
+            default -> { state = "too deep"; color = Ui.MUTED; }
+        }
+        int textX = x + 28;
+        gfx.text(font, Ui.fit(font, name, right - textX - 10), textX, y + 4, Ui.TEXT);
+        int stateX = textX + Math.min(font.width(name), right - textX - 10) + 6;
+        if (stateX < right - 20) gfx.text(font, Ui.fit(font, state, right - stateX - 4), stateX, y + 4, color);
+        if (node.tagId() != null) {
+            ui.tooltip(x + 8, y, 16, 16, List.of(Component.literal("Any #" + node.tagId())));
+        }
+        y += 18;
+
+        if (hasChildren && !isCollapsed) {
+            for (var child : node.children()) {
+                y = drawTreeNode(gfx, child, left, y, right, depth + 1, key, mouseX, mouseY);
+            }
+        }
+        return y;
+    }
+
+    private int treeHeight(CraftingPlan.Node node, String key) {
+        int h = 18;
+        if (!collapsed.contains(key)) {
+            for (var child : node.children()) h += treeHeight(child, key + "/" + child.item().id());
+        }
+        return h;
+    }
+
+    // -- Alternatives tab ------------------------------------------------------
+
+    private int drawAlternativesTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        var insights = AtlasClient.insights();
+        var resolver = insights.alternatives();
+        var inventory = insights.inventory();
+        boolean any = false;
+
+        var ranked = resolver.rankRecipes(selectedEntry, inventory);
+        if (ranked.size() > 1) {
+            any = true;
+            y = heading(gfx, "Ways to make it, cheapest first", x, y);
+            for (var option : ranked) {
+                int lx = x;
+                String label = RecipeView.categoryName(option.recipe().categoryId());
+                gfx.text(font, label, lx, y, Ui.TEXT);
+                lx += font.width(label) + 6;
+                for (var mark : option.marks()) {
+                    String text = switch (mark) {
+                        case CHEAPEST -> "cheapest";
+                        case SIMPLEST -> "simplest";
+                        case CRAFTABLE_NOW -> "can craft now";
+                    };
+                    int color = mark == AlternativeResolver.Mark.SIMPLEST ? 0xFF88CCFF : Ui.GOOD;
+                    gfx.text(font, text, lx, y, color);
+                    lx += font.width(text) + 6;
+                }
+                String cost = option.cost() == Double.POSITIVE_INFINITY ? "loops"
+                        : String.format(Locale.ROOT, "%.1f raw, %d steps", option.cost(), option.steps());
+                gfx.text(font, cost, right - font.width(cost) - 4, y, Ui.MUTED);
+                y += LINE;
+                y += RecipeView.draw(ui, gfx, font, option.recipe(), x, y, 16, right - x) + 6;
+            }
+            y += 4;
+        }
+
+        var substitutions = resolver.substitutions(selectedEntry, inventory);
+        if (!substitutions.isEmpty()) {
+            any = true;
+            y = heading(gfx, "Accepted substitutes", x, y);
+            for (var sub : substitutions) {
+                String label = "Any " + ItemStacks.tagName(sub.ingredient().id());
+                gfx.text(font, label, x, y, Ui.TEXT);
+                gfx.text(font, Ui.fit(font, "#" + sub.ingredient().id(), right - x - font.width(label) - 8),
+                        x + font.width(label) + 6, y, Ui.MUTED);
+                y += LINE;
+                y = drawOptionRow(gfx, sub.options(), x, y, right);
+                y += 4;
+            }
+        }
+
+        var swaps = resolver.interchangeable(selectedEntry.id());
+        if (!swaps.isEmpty()) {
+            any = true;
+            y = heading(gfx, "Can be swapped with", x, y);
+            String tags = String.join(", ", resolver.ingredientTagsOf(selectedEntry.id()).stream()
+                    .map(t -> "#" + t).toList());
+            y = wrapped(gfx, "Recipes asking for " + tags + " take any of these:", x, y, right - x, Ui.MUTED);
+            int ix = x;
+            for (String id : swaps) {
+                if (ix + 18 > right) {
+                    ix = x;
+                    y += 18;
+                }
+                ui.item(gfx, font, ItemStacks.of(id), ix, y, null);
+                ix += 18;
+            }
+            y += 20;
+        }
+
+        if (!any) {
+            y = wrapped(gfx, "No alternatives known. There is only one way to make this and it uses no tags.",
+                    x, y, right - x, Ui.TEXT);
+        }
+        return y;
+    }
+
+    private int drawOptionRow(GuiGraphicsExtractor gfx, List<AlternativeResolver.Option> options, int x, int y, int right) {
+        int ix = x;
+        for (var option : options) {
+            if (ix + 18 > right) {
+                ix = x;
+                y += 18;
+            }
+            if (option.preferred()) {
+                gfx.fill(ix - 1, y - 1, ix + 17, y + 17, option.owned() > 0 ? 0x887CDB7C : 0x668888FF);
+            }
+            ui.item(gfx, font, ItemStacks.of(option.itemId()), ix, y, option.owned() > 0 ? String.valueOf(option.owned()) : null);
+            ix += 18;
+        }
+        return y + 18;
+    }
+
+    // -- Unlocks tab -----------------------------------------------------------
+
+    private int drawUnlocksTab(GuiGraphicsExtractor gfx, int x, int y, int right) {
+        ClientContext context = AtlasClient.context();
+        ContextSnapshot ctx = context.snapshot();
+        var engine = AtlasClient.insights().availability();
+        int width = right - x;
+
+        gfx.text(font, "You are in " + ItemStacks.pretty(ctx.dimensionId())
+                + (ctx.biomeId().isEmpty() ? "" : ", " + ItemStacks.pretty(ctx.biomeId())), x, y, Ui.MUTED);
+        y += LINE + 2;
+        if (!context.progressKnown()) {
+            y = wrapped(gfx, "Recipe book and advancement details are only known in singleplayer.",
+                    x, y, width, Ui.WARN);
+            y += 4;
+        }
+        if (selectedRecipes.isEmpty()) {
+            return wrapped(gfx, "Nothing to unlock: no recipe makes this item.", x, y, width, Ui.TEXT);
+        }
+
+        Set<String> gameRecipes = VanillaRecipeLoader.gameRecipeIds();
+        int shown = 0;
+        for (RecipeNode recipe : selectedRecipes) {
+            if (shown++ >= 12) break;
+            String title = RecipeView.categoryName(recipe.categoryId()) + "  " + recipe.id();
+            gfx.text(font, Ui.fit(font, title, width), x, y, Ui.ACCENT);
+            y += LINE + 1;
+
+            AvailabilityResult result = engine.evaluateFully(recipe, ctx);
+            if (recipe.station().isPresent()) {
+                String station = ItemStacks.name(recipe.station().get().id());
+                boolean near = ctx.nearbyBlockIds().contains(recipe.station().get().id());
+                y = check(gfx, near ? Ui.GOOD : Ui.BAD, near ? station + " nearby" : "Needs a " + station + " nearby", x, y, width);
+            } else {
+                y = check(gfx, Ui.GOOD, "No workstation needed", x, y, width);
+            }
+
+            String base = ClientContext.baseRecipeId(recipe.id());
+            if (context.progressKnown() && gameRecipes.contains(base)) {
+                boolean locked = context.isRecipeLocked(base);
+                String text = locked
+                        ? "Not in your recipe book yet" + (ctx.limitedCrafting() ? ", crafting is blocked until then" : "")
+                        : "In your recipe book";
+                y = check(gfx, !locked ? Ui.GOOD : ctx.limitedCrafting() ? Ui.BAD : Ui.WARN, text, x, y, width);
+                if (locked) {
+                    for (String advancement : context.advancementsUnlocking(base)) {
+                        boolean done = ctx.advancements().contains(advancement);
+                        y = wrapped(gfx, "Unlocked by: " + context.advancementTitle(advancement)
+                                + (done ? " (done)" : ""), x + 8, y, width - 8, Ui.MUTED);
+                    }
+                }
+            }
+
+            for (Blocker blocker : result.details()) {
+                if (blocker.kind() == BlockerKind.MATERIALS || blocker.kind() == BlockerKind.STATION) continue;
+                y = check(gfx, Ui.BAD, blocker.message(), x, y, width);
+            }
+            var missing = result.missingMaterials();
+            y = check(gfx, missing.isEmpty() ? Ui.GOOD : Ui.WARN, missing.isEmpty() ? "You have all materials"
+                    : "Missing " + missing.size() + (missing.size() == 1 ? " material" : " materials"), x, y, width);
+            y += 8;
+        }
+        return y;
+    }
+
+    /** A checklist line. Green means fine, yellow is worth knowing, red blocks crafting. */
+    private int check(GuiGraphicsExtractor gfx, int color, String text, int x, int y, int width) {
+        dot(gfx, x, y, color);
+        return wrapped(gfx, text, x + 8, y, width - 8, color == Ui.GOOD ? Ui.TEXT : color);
+    }
+
+    // -- Notes tab -------------------------------------------------------------
+
+    private int drawNotesTab(GuiGraphicsExtractor gfx, int x, int y, int right, int mouseX, int mouseY) {
+        int width = right - x;
+        ItemStack stack = ItemStacks.of(selectedEntry);
+
+        List<InfoPage> pages = AtlasApi.get().infoRegistry().pagesFor(selectedEntry, AtlasClient.tags());
+        for (InfoPage page : pages) {
+            y = heading(gfx, page.title().isEmpty() ? "Info" : page.title(), x, y);
+            for (String line : page.lines()) {
+                y = wrapped(gfx, line, x, y, width, Ui.TEXT);
+            }
+            if (!page.source().isEmpty()) {
+                gfx.text(font, "from " + page.source().replace("resourcepack:", "pack "), x, y, Ui.MUTED);
+                y += LINE;
+            }
+            y += 6;
+        }
+
+        y = heading(gfx, "Your notes", x, y);
+        NoteStore notes = AtlasClient.notes();
+        List<String> list = notes.notes(selectedEntry);
+        if (list.isEmpty()) {
+            y = wrapped(gfx, "No notes yet. Type below and press Enter.", x, y, width, Ui.MUTED);
+        }
+        for (int i = 0; i < list.size(); i++) {
+            final int index = i;
+            ui.button(gfx, font, "x", right - 12, y - 1, 0x55603030, Ui.BAD, mouseX, mouseY, () -> {
+                notes.remove(selectedEntry, index);
+                AtlasClient.saveAll();
+            });
+            y = wrapped(gfx, "- " + list.get(i), x, y, width - 18, Ui.TEXT) + 2;
+        }
+        y += 6;
+
+        y = heading(gfx, "Details", x, y);
+        gfx.text(font, selectedEntry.id(), x, y, Ui.MUTED);
+        y += LINE;
+        gfx.text(font, "From: " + ItemStacks.pretty(selectedEntry.namespace()), x, y, Ui.TEXT);
+        y += LINE;
+        if (!stack.isEmpty()) {
+            gfx.text(font, "Stack size: " + stack.getMaxStackSize(), x, y, Ui.TEXT);
+            y += LINE;
+            if (stack.getMaxDamage() > 0) {
+                gfx.text(font, "Durability: " + stack.getMaxDamage(), x, y, Ui.TEXT);
+                y += LINE;
+            }
+            gfx.text(font, "Rarity: " + ItemStacks.pretty(stack.getRarity().name().toLowerCase(Locale.ROOT)), x, y, Ui.TEXT);
+            y += LINE;
+        }
+        var tags = new TreeSet<>(AtlasClient.tags().tagsOf(selectedEntry.id()));
+        if (!tags.isEmpty()) {
+            y = wrapped(gfx, "Tags: " + String.join(", ", tags.stream().map(t -> "#" + t).toList()),
+                    x, y, width, Ui.MUTED);
+        }
+        y += 6;
+        return y;
+    }
+
+    private void addNote() {
+        if (selectedEntry == null || noteBox.getValue().isBlank()) return;
+        AtlasClient.notes().add(selectedEntry, noteBox.getValue());
+        AtlasClient.saveAll();
+        noteBox.setValue("");
+        showFeedback("Note saved");
+    }
+
+    // -- Plans panel -----------------------------------------------------------
+
+    private void drawPlansPanel(GuiGraphicsExtractor gfx, int x, int mouseX, int mouseY) {
+        int right = width - 6;
+        int y = HEADER_HEIGHT + 4;
+        gfx.text(font, "Build plans", x, y, Ui.HEADER);
+        y += LINE + 4;
+
+        PinnedPlanManager plans = AtlasClient.buildPlans();
+        if (plans.plans().isEmpty()) {
+            wrapped(gfx, "No plans yet. Open an item, go to the Tree tab and press \"Pin plan\". "
+                    + "Pinned plans track what you still need and appear next to your inventory.",
+                    x, y, right - x, Ui.TEXT);
             return;
         }
-        String prefix = activeFilter > 0 ? filterValue + " " : "";
+
+        contentTop = y;
+        contentBottom = height - 24;
+        gfx.enableScissor(x - 2, contentTop, width, contentBottom);
+        ui.clip(contentTop, contentBottom);
+        int start = y - rightScroll;
+        y = start;
+        for (var pinned : List.copyOf(plans.plans())) {
+            CraftingPlan plan = AtlasClient.insights().plan(pinned.target(), pinned.count());
+            ui.item(gfx, font, ItemStacks.of(pinned.target()), x, y, null);
+            String name = pinned.count() + "x " + ItemStacks.name(pinned.target().id());
+            gfx.text(font, Ui.fit(font, name, right - x - 70), x + 20, y + 1, Ui.TEXT);
+            String state = plan.done() ? "ready" : Math.round(plan.progress() * 100) + "%";
+            gfx.text(font, state, right - font.width(state) - 4, y + 1, plan.done() ? Ui.GOOD : Ui.WARN);
+            Ui.progress(gfx, x + 20, y + 12, right - x - 24, plan.progress());
+            y += 18;
+
+            int ix = x + 20;
+            for (var material : plan.missingMaterials()) {
+                if (ix + 18 > right) break;
+                ui.item(gfx, font, ItemStacks.of(material.item()), ix, y, String.valueOf(material.missing()));
+                ix += 18;
+            }
+            if (!plan.missingMaterials().isEmpty()) y += 18;
+
+            int bx = x + 20;
+            bx += ui.button(gfx, font, "Open", bx, y, false, mouseX, mouseY, () -> {
+                showPlans = false;
+                activeTab = DeepModeTab.TREE;
+                navigate(pinned.target());
+            }) + 2;
+            bx += ui.button(gfx, font, "-", bx, y, false, mouseX, mouseY, () -> {
+                if (pinned.count() > 1) plans.pin(pinned.target(), pinned.count() - 1);
+            }) + 2;
+            bx += ui.button(gfx, font, "+", bx, y, false, mouseX, mouseY,
+                    () -> plans.pin(pinned.target(), pinned.count() + 1)) + 2;
+            ui.button(gfx, font, "Remove", bx, y, 0x55603030, Ui.BAD, mouseX, mouseY, () -> {
+                plans.unpin(pinned.target());
+                AtlasClient.saveAll();
+            });
+            y += 20;
+        }
+        ui.unclip();
+        gfx.disableScissor();
+        contentHeight = y - start;
+        drawScrollBar(gfx);
+    }
+
+    // -- Filter + Help ---------------------------------------------------------
+
+    private void applyFilter() {
+        String filterValue = filterOptions.get(activeFilter);
         String current = searchBox.getValue().replaceAll("@\\S+\\s*", "").trim();
-        searchBox.setValue(prefix + current);
+        if (activeFilter == 0 || "Saved".equals(filterValue) || "Plans".equals(filterValue)) {
+            searchBox.setValue(current);
+            onSearchChanged(current);
+            return;
+        }
+        searchBox.setValue(filterValue + " " + current);
     }
 
     private void drawHelpOverlay(GuiGraphicsExtractor gfx) {
-        int ox = width / 4;
-        int oy = height / 4;
-        int ow = width / 2;
-        int oh = height / 2;
+        int ow = Math.min(width - 40, 300);
+        int oh = Math.min(height - 40, 210);
+        int ox = (width - ow) / 2;
+        int oy = (height - oh) / 2;
         gfx.fill(ox, oy, ox + ow, oy + oh, 0xEE101018);
-        gfx.fill(ox, oy, ox + ow, oy + 1, DIVIDER_COLOR);
-        gfx.fill(ox, oy + oh - 1, ox + ow, oy + oh, DIVIDER_COLOR);
-        gfx.fill(ox, oy, ox + 1, oy + oh, DIVIDER_COLOR);
-        gfx.fill(ox + ow - 1, oy, ox + ow, oy + oh, DIVIDER_COLOR);
+        gfx.outline(ox, oy, ow, oh, DIVIDER_COLOR);
 
         int x = ox + 8;
         int y = oy + 8;
-        int lineH = 11;
-
-        gfx.text(font, Component.literal("Atlas Deep Mode"), x, y, HEADER_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Browse items on the left, click to select."), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Recipes and details appear on the right."), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Tabs: Craft (how to make), Use (used in),"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Sources (all ways to obtain)."), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Search prefixes:"), x, y, 0xFF8888FF); y += lineH;
-        gfx.text(font, Component.literal("  @mod    - show items from a specific mod"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("  $tag    - filter by item tag"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("  #text   - search in tooltip text"), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Use the filter buttons (All / Vanilla / Saved)"), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("to narrow results. Mod filters auto-detected."), x, y, TEXT_COLOR); y += lineH + 2;
-        gfx.text(font, Component.literal("Keybinds: U to open, Esc to close."), x, y, TEXT_COLOR); y += lineH;
-        gfx.text(font, Component.literal("Click ? again to close this help."), x, y, TEXT_COLOR); y += lineH + 4;
-        gfx.text(font, Component.literal("github.com/shaedy180/Atlas"), x, y, 0xFF666688);
+        int w = ow - 16;
+        gfx.text(font, "Atlas Deep Mode", x, y, Ui.HEADER);
+        y += LINE + 3;
+        y = wrapped(gfx, "Pick an item on the left. The tabs on the right answer one question each:", x, y, w, Ui.TEXT);
+        y = wrapped(gfx, "Craft: how to make it and what is missing. Uses: what it goes into. "
+                + "Sources: every way to get it. Tree: the full crafting tree with material totals. "
+                + "Alternatives: other recipes and substitutes. Unlocks: why you can not make it yet. "
+                + "Notes: details, pack tips and your own notes.", x, y, w, Ui.TEXT);
+        y += 3;
+        y = wrapped(gfx, "Search: @mod, $tag, #tooltip. Click any item in a recipe to open it, "
+                + "Backspace goes back. Pin a plan in the Tree tab to track it next to your inventory.",
+                x, y, w, Ui.TEXT);
+        y += 3;
+        wrapped(gfx, "Keys: U opens Atlas, O toggles Quick Mode, Esc closes. Click to close this help.",
+                x, y, w, Ui.MUTED);
     }
 
-    // ── Input handling ──────────────────────────────────────────────────
+    // -- Input handling --------------------------------------------------------
 
     @Override
-    public boolean mouseClicked(MouseButtonEvent event, boolean bl) {
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (showHelp) {
+            showHelp = false;
+            return true;
+        }
+        if (super.mouseClicked(event, doubleClick)) return true;
+
         double mouseX = event.x();
         double mouseY = event.y();
+        if (event.button() == 0 && ui.click(mouseX, mouseY)) return true;
 
-        // Save button click detection (right side of recipe panel header)
-        if (selectedEntry != null) {
-            int pinHeaderY = HEADER_HEIGHT + TAB_HEIGHT + 8 + 2;
-            String pinLabel = AtlasFabricClient.pinnedPlanManager().isPinned(selectedEntry) ? "Unsave" : "Save";
-            int pinW = font.width(pinLabel) + 8;
-            int pinX = width - pinW - 8;
-            if (mouseX >= pinX && mouseX < pinX + pinW && mouseY >= pinHeaderY && mouseY < pinHeaderY + 14) {
-                PinnedPlanManager pm = AtlasFabricClient.pinnedPlanManager();
-                if (pm.isPinned(selectedEntry)) {
-                    pm.unpin(selectedEntry);
-                } else {
-                    pm.pin(selectedEntry, 1);
-                }
-                return true;
-            }
-        }
-
-        // Recipe item click-through: clicking an ingredient/output navigates to its recipes
         int dividerX = panelDividerX();
-        if (mouseX > dividerX) {
-            for (var hitBox : recipeHitBoxes) {
-                if (mouseX >= hitBox.x && mouseX < hitBox.x + hitBox.w
-                        && mouseY >= hitBox.y && mouseY < hitBox.y + hitBox.h) {
-                    selectedEntry = hitBox.entry;
-                    selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
-                    LOGGER.info("[Atlas] Recipe click-through: {}", selectedEntry.id());
-                    return true;
-                }
-            }
-        }
-
-        // Filter chip click handling (manual, matching scissor-rendered chips)
-        int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
-        int filterAreaLeft = 6;
-        int filterAreaRight = panelDividerX() - 6;
-        if (mouseY >= filterY && mouseY < filterY + 14 && mouseX >= filterAreaLeft && mouseX < filterAreaRight) {
-            int fx = filterAreaLeft - filterScrollOffset;
-            for (int i = 0; i < filterLabels.size(); i++) {
-                int fw = font.width(filterLabels.get(i)) + 12;
-                if (mouseX >= Math.max(filterAreaLeft, fx) && mouseX < Math.min(filterAreaRight, fx + fw)) {
-                    activeFilter = i;
-                    applyFilter();
-                    return true;
-                }
-                fx += fw + 2;
-            }
-        }
-
-        // Check if click is in the item grid
-        int startY = HEADER_HEIGHT + SEARCH_HEIGHT + 24;
+        int startY = gridTop();
         int startX = 6;
-
         if (mouseX >= startX && mouseX < dividerX && mouseY >= startY && mouseY < height) {
             int col = (int) (mouseX - startX) / ITEM_SIZE;
             int row = (int) (mouseY - startY) / ITEM_SIZE;
             int idx = (row + scrollOffset) * gridColumns + col;
-
             if (col < gridColumns && idx >= 0 && idx < searchResults.size()) {
-                selectedEntry = searchResults.get(idx);
-                selectedRecipes = AtlasApi.get().recipeGraph().recipesFor(selectedEntry);
-
-                // Creative mode: give item to player
-                giveItemIfCreative(selectedEntry, event);
-
+                EntryKey entry = searchResults.get(idx);
+                if (event.button() == 1) {
+                    // Right click goes straight to the uses
+                    navigate(entry);
+                    activeTab = DeepModeTab.USE;
+                    return true;
+                }
+                navigate(entry);
+                showPlans = false;
+                giveItemIfCreative(entry, event);
                 return true;
             }
         }
+        return false;
+    }
 
-        return super.mouseClicked(event, bl);
+    @Override
+    public boolean keyPressed(KeyEvent event) {
+        if (noteBox.isVisible() && noteBox.isFocused() && (event.key() == InputConstants.KEY_RETURN || event.key() == InputConstants.KEY_NUMPADENTER)) {
+            addNote();
+            return true;
+        }
+        boolean typing = searchBox.isFocused() || noteBox.isFocused();
+        if (!typing && event.key() == InputConstants.KEY_BACKSPACE) {
+            goBack();
+            return true;
+        }
+        if (!typing && AtlasKeyBindings.focusSearch != null && AtlasKeyBindings.focusSearch.matches(event)) {
+            setFocused(searchBox);
+            return true;
+        }
+        return super.keyPressed(event);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        // Horizontal scroll for filter row
         int filterY = HEADER_HEIGHT + SEARCH_HEIGHT + 6;
-        if (mouseX < panelDividerX() && mouseY >= filterY && mouseY < filterY + 18) {
-            int maxScroll = Math.max(0, totalFilterWidth - panelDividerX() + 12);
-            filterScrollOffset = Math.max(0, Math.min(maxScroll, filterScrollOffset + (int)(scrollY * -8)));
+        int dividerX = panelDividerX();
+        if (mouseX < dividerX && mouseY >= filterY && mouseY < filterY + 18) {
+            int maxScroll = Math.max(0, totalFilterWidth - dividerX + 12);
+            filterScrollOffset = Math.max(0, Math.min(maxScroll, filterScrollOffset + (int) (scrollY * -8)));
             return true;
         }
-        // Scroll item grid in the left panel
-        if (mouseX < panelDividerX()) {
-            scrollOffset = Math.max(0, scrollOffset - (int) scrollY);
+        if (mouseX < dividerX) {
+            int rows = (searchResults.size() + gridColumns - 1) / gridColumns;
+            int visibleRows = (height - gridTop() - 4) / ITEM_SIZE;
+            scrollOffset = Math.max(0, Math.min(Math.max(0, rows - visibleRows), scrollOffset - (int) scrollY));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        rightScroll = Math.max(0, rightScroll - (int) (scrollY * 18));
+        return true;
     }
 
     @Override
@@ -742,74 +1215,28 @@ public class AtlasScreen extends Screen {
         return true;
     }
 
-    // ── Creative Mode ─────────────────────────────────────────────────
+    // -- Creative Mode ---------------------------------------------------------
 
     private void giveItemIfCreative(EntryKey entry, MouseButtonEvent event) {
         var mc = Minecraft.getInstance();
         if (mc.player == null || !mc.player.getAbilities().instabuild || mc.gameMode == null) return;
 
-        ItemStack stack = entryToStack(entry);
+        ItemStack stack = ItemStacks.of(entry);
         if (stack.isEmpty()) return;
-
-        boolean shifted = (event.modifiers() & GLFW.GLFW_MOD_SHIFT) != 0;
         stack = stack.copy();
-        stack.setCount(shifted ? stack.getMaxStackSize() : 1);
+        stack.setCount(event.hasShiftDown() ? stack.getMaxStackSize() : 1);
 
         // Find next free inventory slot instead of overwriting hotbar
         int freeSlot = mc.player.getInventory().getFreeSlot();
         if (freeSlot == -1) {
-            showFeedback("\u00A7c Inventory full!");
+            showFeedback("Inventory full!");
             return;
         }
         // Set locally first so the item appears immediately, then sync to server
         mc.player.getInventory().setItem(freeSlot, stack.copy());
         int containerSlot = freeSlot < 9 ? freeSlot + 36 : freeSlot;
         mc.gameMode.handleCreativeModeItemAdd(stack, containerSlot);
-        showFeedback("\u00A7a\u2714 " + stack.getHoverName().getString() + " x" + stack.getCount());
+        showFeedback("Got " + stack.getHoverName().getString() + " x" + stack.getCount());
         LOGGER.info("[Atlas] Creative give: {} x{} -> slot {}", entry.id(), stack.getCount(), freeSlot);
-    }
-
-    // ── Utility: convert entry/ingredient IDs to ItemStack ──────────────
-
-    private static ItemStack entryToStack(EntryKey entry) {
-        if (!"item".equals(entry.type())) return ItemStack.EMPTY;
-        return idToStack(entry.id());
-    }
-
-    /**
-     * Resolves an IngredientKey to a representative ItemStack.
-     * For tag-based ingredients, picks the first item in the tag.
-     */
-    private static ItemStack ingredientToStack(IngredientKey ingredient) {
-        if (ingredient.tagBased()) {
-            return tagToStack(ingredient.id());
-        }
-        return idToStack(ingredient.id());
-    }
-
-    private static ItemStack tagToStack(String tagId) {
-        try {
-            Identifier loc = Identifier.parse(tagId);
-            TagKey<Item> tagKey = TagKey.create(BuiltInRegistries.ITEM.key(), loc);
-            for (var holder : BuiltInRegistries.ITEM.getTagOrEmpty(tagKey)) {
-                return new ItemStack(holder.value());
-            }
-        } catch (Exception ignored) {
-        }
-        return ItemStack.EMPTY;
-    }
-
-    private static ItemStack idToStack(String id) {
-        try {
-            Identifier loc = Identifier.parse(id);
-            var optHolder = BuiltInRegistries.ITEM.get(loc);
-            if (optHolder.isPresent()) {
-                Item item = optHolder.get().value();
-                return new ItemStack(item);
-            }
-        } catch (Exception ignored) {
-            // Malformed ID, just return empty
-        }
-        return ItemStack.EMPTY;
     }
 }
