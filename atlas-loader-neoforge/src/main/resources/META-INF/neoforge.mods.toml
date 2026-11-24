@@ -1,0 +1,22 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "LGPL-3.0-or-later"
+issueTrackerURL = "https://github.com/shaedy180/Atlas/issues"
+
+[[mods]]
+modId = "atlas"
+version = "${version}"
+displayName = "Atlas"
+displayURL = "https://github.com/shaedy180/Atlas"
+iconFile = "assets/atlas/icon.png"
+authors = "shaedy180"
+description = '''
+Recipe and item intelligence: recipes, uses, sources, crafting trees, build plans and notes for every item.
+'''
+
+[[dependencies.atlas]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_range}"
+ordering = "NONE"
+side = "CLIENT"

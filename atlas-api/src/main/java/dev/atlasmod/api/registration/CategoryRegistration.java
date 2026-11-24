@@ -21,6 +21,8 @@ public final class CategoryRegistration {
     private String name;
     private String icon;
     private int order = 100;
+    private final List<String> stations = new ArrayList<>();
+    private final List<String> recipeTypes = new ArrayList<>();
 
     public CategoryRegistration(String id) {
         this.id = id;
@@ -41,9 +43,29 @@ public final class CategoryRegistration {
         return this;
     }
 
+    /**
+     * Blocks or machines that run this category, e.g. your alloy furnace.
+     * The first one is the default station of every recipe in the category and
+     * all of them list the category in their Uses tab.
+     */
+    public CategoryRegistration station(String... stationIds) {
+        stations.addAll(List.of(stationIds));
+        return this;
+    }
+
+    /**
+     * Game recipe types that Atlas should import into this category on its own.
+     * Their recipes are read through the vanilla recipe display system, so no
+     * further code is needed if your recipes implement {@code display()}.
+     */
+    public CategoryRegistration recipeType(String... recipeTypeIds) {
+        recipeTypes.addAll(List.of(recipeTypeIds));
+        return this;
+    }
+
     public void register() {
         if (name == null) name = id;
-        PENDING.add(new RecipeCategory(id, name, icon, order));
+        PENDING.add(new RecipeCategory(id, name, icon, order, stations, recipeTypes));
     }
 
     public static List<RecipeCategory> drainPending() {

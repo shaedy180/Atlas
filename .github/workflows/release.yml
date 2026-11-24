@@ -12,7 +12,7 @@ permissions: {}
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     permissions:
       contents: write
@@ -37,8 +37,8 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/main
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
-      - name: Build
-        run: ./gradlew build --no-daemon
+      - name: Build every Minecraft version
+        run: scripts/build-all.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -47,4 +47,4 @@ jobs:
           tag_name: ${{ github.event.inputs.tag }}
           name: Atlas ${{ github.event.inputs.tag }}
           generate_release_notes: true
-          files: atlas-loader-fabric/build/libs/atlas-*.jar
+          files: build/dist/atlas-*.jar

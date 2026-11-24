@@ -6,13 +6,13 @@ package dev.atlasmod.ui;
 public enum AtlasMode {
     /**
      * Quick Mode: lightweight overlay in the inventory screen.
-     * Search, favorites, recipe/uses, transfer buttons.
+     * Search, saved items, recipe preview, recipe paste and the plan tracker.
      */
     QUICK,
 
     /**
-     * Deep Mode: fullscreen Atlas screen with navigation, recipe graph,
-     * context sidebar, and tabs (Craft, Use, Sources, Alternatives, Unlocks, Notes).
+     * Deep Mode: fullscreen Atlas screen with the item list and the tabs
+     * Craft, Uses, Sources, Tree, Alternatives, Unlocks and Notes.
      */
     DEEP
 }

@@ -7,14 +7,14 @@ import java.util.Objects;
  * <p>
  * Prefixes:
  * <ul>
- *   <li>{@code @mod}   — filter by mod id</li>
- *   <li>{@code #text}  — search in tooltips</li>
- *   <li>{@code $tag}   — filter by item/block tag</li>
- *   <li>{@code >source} — filter by source type</li>
- *   <li>{@code =station} — filter by workstation</li>
- *   <li>{@code ~unlocked} — show only unlocked</li>
- *   <li>{@code !hidden}   — include hidden entries</li>
- *   <li>{@code *renewable} — show only renewable sources</li>
+ *   <li>{@code @mod}   - filter by mod id</li>
+ *   <li>{@code #text}  - search in tooltips</li>
+ *   <li>{@code $tag}   - filter by item/block tag</li>
+ *   <li>{@code >source} - filter by source type</li>
+ *   <li>{@code =station} - filter by workstation</li>
+ *   <li>{@code ~unlocked} - show only unlocked</li>
+ *   <li>{@code !hidden}   - include hidden entries</li>
+ *   <li>{@code *renewable} - show only renewable sources</li>
  * </ul>
  */
 public record SearchQuery(
