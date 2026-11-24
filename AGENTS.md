@@ -34,4 +34,4 @@ Done means implemented changes, appropriate tests and CI passing, production com
 
 ## Java conventions
 
-Use the checked-in Gradle wrapper and Java toolchain. Preserve mod IDs and saved-world compatibility. Build with `./gradlew build --no-daemon`; do not declare a Minecraft version supported until that revision builds. Keep classes focused, avoid wildcard imports and use clear commit messages.
+Use the checked-in Gradle wrapper and Java toolchain. Preserve mod IDs and saved-world compatibility. Build one Minecraft version with `./gradlew build --no-daemon -Pmc=<version>` and all of them with `scripts/build-all.sh`. Every supported version has a `versions/<mc>.properties` file; do not declare a Minecraft version supported until that revision builds. Version specific code goes into `atlas-common/src/compat`, loader specific code stays in the loader modules. Keep classes focused, avoid wildcard imports and use clear commit messages.

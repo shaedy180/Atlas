@@ -1,6 +1,6 @@
 # Atlas
 
-A recipe and item intelligence mod for Minecraft 26.1.1 (Fabric).
+A recipe and item intelligence mod for Minecraft 26.1.1 to 26.3 (Fabric and NeoForge).
 
 Atlas goes beyond the typical recipe viewer. Instead of just showing you flat recipe cards, it gives you a complete picture of how to get any item in the game, which recipes use it, where it comes from, and what alternatives exist. It works with vanilla and modded content out of the box.
 
@@ -13,7 +13,7 @@ Atlas goes beyond the typical recipe viewer. Instead of just showing you flat re
 
 **Quick Mode** shows up as a resizable panel on the side of your inventory. Browse items, search by name, mod, tag or tooltip, and see recipes right there without leaving your crafting table. It stays out of your way but is always one keypress away.
 
-**Deep Mode** is a full-screen interface (press U) with a browsable item list on the left and detailed recipe information on the right. Tabs let you switch between how to craft something, what it is used in, and all the ways you can obtain it.
+**Deep Mode** is a full-screen interface (press U) with a browsable item list on the left and detailed recipe information on the right. Tabs let you switch between how to craft something, what it is used in, all the ways you can obtain it, the full crafting tree, alternatives, unlock requirements and notes. Click any item in a recipe to jump to it, Backspace goes back.
 
 **Search** supports prefixes like `@modname` to filter by mod, `$tag` to filter by item tag, and `#text` to search inside tooltips. Filter buttons are auto-detected based on which mods are installed.
 
@@ -21,24 +21,28 @@ Atlas goes beyond the typical recipe viewer. Instead of just showing you flat re
 
 **Creative mode** lets you click any item in the Atlas UI to add it directly to your inventory.
 
-## Coming soon
+**Why can't I make this?** Every recipe tells you what is in the way: a missing workstation nearby, the wrong dimension or biome, a recipe you have not unlocked yet, or the exact materials you are short of. Quick Mode shows this as a small colored dot next to each recipe.
 
-- **Availability Engine** that explains why you can not make something yet (missing workstation, wrong dimension, locked progression)
-- **Alternative Resolver** showing tag-based substitutions and marking the cheapest or simplest options
-- **Recipe graph** with tree views, intermediate requirements, cycle detection, and material totals
-- **Pinned build plans** that track what you still need and what you already have
-- **Notes and info pages** for pack-specific tips and item details
-- **NeoForge support**
-- **Mod API** so other mods can register their machines and custom recipe types with zero effort
+**Crafting tree** (Tree tab) expands an item down to raw materials. It uses what is already in your inventory, keeps leftovers like the extra planks from a log, stops at loops such as ingots and blocks, and adds up the materials and crafting steps.
+
+**Alternatives** lists every recipe for an item with the cheapest and simplest one marked, every item a tag slot accepts (owned ones highlighted), and items that can be swapped in.
+
+**Build plans** are pinned from the Tree tab. They show up next to your inventory with progress and the materials still missing, and `/atlas plans` prints them in chat.
+
+**Notes** keep your own notes per item, next to item details and info pages from resource packs or mods.
 
 ## Installation
 
-Requires:
-- Minecraft 26.1.1
-- Fabric Loader 0.18.6
-- Fabric API 0.145.4 for 26.1.1
+Pick the jar that matches your Minecraft version and loader and drop it into your `mods` folder.
 
-Drop the jar into your `mods` folder.
+| Minecraft | Fabric | NeoForge |
+|-----------|--------|----------|
+| 26.1.1 | Fabric API 0.145.4 | not available (NeoForge only has betas) |
+| 26.1.2 | Fabric API 0.155.3 | NeoForge 26.1.2.129 |
+| 26.2 | Fabric API 0.161.0 | NeoForge 26.2.0.95 |
+| 26.3 | Fabric API 0.167.0 | NeoForge 26.3.0.116 |
+
+Fabric needs Fabric Loader 0.18.4 or newer (0.19.3 for 26.3). Atlas is client side only. Recipes, the recipe book and advancements are read in singleplayer.
 
 ## Keybinds
 
@@ -52,10 +56,98 @@ Both can be rebound in the controls menu under the Atlas category.
 ## Building from source
 
 ```
-./gradlew build
+./gradlew build                  # latest Minecraft version (26.3)
+./gradlew build -Pmc=26.1.1      # one specific version
+scripts/build-all.sh             # every version, jars end up in build/dist/
 ```
 
-The output jar will be in `atlas-loader-fabric/build/libs/`.
+Each supported version has a file in `versions/` with its Minecraft, Fabric API and NeoForge versions. Single builds put the jars in `atlas-loader-fabric/build/libs/` and `atlas-loader-neoforge/build/libs/`.
+
+`./gradlew :atlas-loader-fabric:runClientGameTest -Pmc=<version>` starts a real client, creates a world, checks recipe loading, the planner and the API, and saves screenshots of every screen. It needs a display.
+
+## Mod API
+
+Other mods can feed Atlas their machines, recipe types, recipes and tips. Add the Atlas jar as a compile only dependency; everything lives in `dev.atlasmod.api`.
+
+**Getting called.** On Fabric, list your plugin under the `atlas` entrypoint in `fabric.mod.json`:
+
+```json
+"entrypoints": { "atlas": ["com.example.mymod.MyAtlasPlugin"] }
+```
+
+On NeoForge, annotate the class with `@AtlasEntrypoint` and give it a public no-argument constructor. Either way the class implements `AtlasPlugin`:
+
+```java
+public class MyAtlasPlugin implements AtlasPlugin {
+    @Override
+    public void onAtlasReady() {
+        // register categories, recipes and info pages here
+    }
+
+    @Override
+    public void onWorldLoad() {
+        // optional: world or datapack dependent recipes, removed again when the world is left
+    }
+}
+```
+
+**Machines and recipe types.** If your recipes implement `display()` like vanilla ones, Atlas already imports them: unknown recipe types get their own category. Registering the category gives it a proper name, icon and station:
+
+```java
+AtlasApi.category("mymod:alloy_smelting")
+        .name("Alloy Smelting")
+        .icon("mymod:alloy_furnace")
+        .station("mymod:alloy_furnace")      // machine that runs it, also lists the category in its Uses tab
+        .recipeType("mymod:alloy_smelting")  // game recipe type to import into this category
+        .register();
+```
+
+**Recipes by hand.** For recipes that do not live in the recipe manager:
+
+```java
+AtlasApi.recipes("mymod:alloy_smelting")
+        .id("mymod:bronze")
+        .input(IngredientKey.item("minecraft:copper_ingot"), 3)
+        .display(IngredientKey.tag("c:ingots/tin"))
+        .output(new EntryKey("item", "mymod:bronze_ingot"), 4)
+        .time(200)
+        .energy(1200)
+        .require(new UnlockCondition.RequiresDimension("minecraft:the_nether"))
+        .register();
+```
+
+Without `.station(...)` the category's first station is used. Recipes registered in `onAtlasReady()` stay across world reloads. Use `.grid(width, height)` for shaped grids, with `IngredientKey.EMPTY` for gaps.
+
+**Unlock conditions** decide what the Unlocks tab and the "why can't I make this" hints say: `RequiresStation`, `RequiresDimension`, `RequiresBiome` (an id, or a tag written as `#minecraft:is_forest`), `RequiresAdvancement`, `RequiresProgression`, `RequiresCatalyst`, `Custom` (always blocks) and `Check`, which runs your own test against the player's context. Several conditions are combined with `require(...)` or `UnlockCondition.and(...)`. Stage mods can report their stages with `AtlasApi.stageProvider(...)`, they satisfy `RequiresProgression` with the same key.
+
+**Other sources.** Mob drops, machine byproducts and the like go into the Sources tab:
+
+```java
+AtlasApi.addSource("minecraft:flint", new AcquisitionSource(
+        AcquisitionSource.SourceType.BLOCK_DROP, "Gravel", "10% chance when broken"));
+```
+
+**Info pages** show up in the Notes tab. From code:
+
+```java
+AtlasApi.info("mymod:tin_tips")
+        .title("Finding tin")
+        .line("Tin ore spawns below Y 40 in mountain biomes.")
+        .forItems("mymod:raw_tin", "#c:ores/tin")
+        .register();
+```
+
+Mods and resource packs can also ship them as JSON at `assets/<namespace>/atlas/info/<name>.json`, which is handy for modpacks:
+
+```json
+{
+  "title": "Iron in this pack",
+  "items": ["minecraft:iron_ingot", "#c:ores/iron"],
+  "lines": ["Iron is rare here, use the ore washer from Create."]
+}
+```
+
+Use `AtlasApi.isReady()` if Atlas is an optional dependency. `/atlas debug` shows how many recipes, categories, info pages and plugins Atlas picked up.
 
 ## Links
 
@@ -77,7 +169,7 @@ LGPL-3.0-or-later
 
 ## Development and release
 
-Use Java 25 and the included wrapper. Modules: `atlas-core` data model, `atlas-api` integrations, `atlas-search` search, `atlas-ui` abstractions, and `atlas-loader-fabric` runtime. Read [AGENTS.md](AGENTS.md). Changes use `working-branch` → `main`; CI validates the wrapper, builds all modules and uploads jars. The manual release workflow builds a verified main revision and creates a versioned GitHub release. Install jars in the matching Minecraft/Fabric `mods` folder; no VPS deployment applies. Preserve saves and the previous compatible jar for rollback. Historical experimental work is retained through recovery tags, not implicitly released. Contributions retain the LGPL-3.0-or-later license.
+Use Java 25 and the included wrapper. Modules: `atlas-core` data model and analysis (availability, planner, alternatives), `atlas-api` integrations, `atlas-search` search, `atlas-ui` persisted UI state, `atlas-common` the shared client code with small per-version shims in `src/compat`, and `atlas-loader-fabric` / `atlas-loader-neoforge` as thin loader entry points. Read [AGENTS.md](AGENTS.md). Changes use `working-branch` → `main`; CI validates the wrapper, builds and tests every version in `versions/` with `scripts/build-all.sh` and uploads the jars. The manual release workflow builds a verified main revision for every version and creates a versioned GitHub release with all jars. Install jars in the matching Minecraft/Fabric `mods` folder; no VPS deployment applies. Preserve saves and the previous compatible jar for rollback. Historical experimental work is retained through recovery tags, not implicitly released. Contributions retain the LGPL-3.0-or-later license.
 
 # Security Policy
 
@@ -85,8 +177,8 @@ Use Java 25 and the included wrapper. Modules: `atlas-core` data model, `atlas-a
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   | Yes                |
-| < 0.2   | No                 |
+| 0.3.x   | Yes                |
+| < 0.3   | No                 |
 
 ## Reporting a Vulnerability
 
