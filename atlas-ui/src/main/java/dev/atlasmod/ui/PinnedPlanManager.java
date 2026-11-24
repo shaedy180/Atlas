@@ -2,15 +2,21 @@ package dev.atlasmod.ui;
 
 import dev.atlasmod.core.entry.EntryKey;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * Manages the player's "shopping list" - pinned target items whose crafting
- * paths, missing ingredients, and alternatives are tracked across sessions.
+ * A persisted list of target items with an amount. Atlas uses one instance for
+ * saved items (bookmarks) and one for pinned build plans, whose missing
+ * materials are tracked while you play.
  *
  * Persists to a simple line-based text file so plans survive game restarts.
  * Format: one plan per line as "type|id|count"
@@ -38,6 +44,14 @@ public final class PinnedPlanManager {
         return plans.stream().anyMatch(p -> p.target().equals(target));
     }
 
+    /** Pinned amount for the target, or 0 when it is not pinned. */
+    public int count(EntryKey target) {
+        for (PinnedPlan plan : plans) {
+            if (plan.target().equals(target)) return plan.count();
+        }
+        return 0;
+    }
+
     public List<PinnedPlan> plans() {
         return Collections.unmodifiableList(plans);
     }
@@ -53,7 +67,7 @@ public final class PinnedPlanManager {
      * Creates parent directories if needed. Overwrites existing file.
      */
     public void save(Path file) throws IOException {
-        Files.createDirectories(file.getParent());
+        Files.createDirectories(file.toAbsolutePath().getParent());
         try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
             for (PinnedPlan plan : plans) {
                 // Validate no pipe characters in type/id to prevent format corruption

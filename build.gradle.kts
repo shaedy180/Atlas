@@ -40,3 +40,15 @@ subprojects {
         }
     }
 }
+
+// Plain Java modules carry the logic and have unit tests.
+configure(subprojects.filter { it.name in setOf("atlas-core", "atlas-api", "atlas-search", "atlas-ui") }) {
+    dependencies {
+        "testImplementation"(platform("org.junit:junit-bom:6.1.3"))
+        "testImplementation"("org.junit.jupiter:junit-jupiter")
+        "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+    }
+    tasks.withType<Test> {
+        useJUnitPlatform()
+    }
+}

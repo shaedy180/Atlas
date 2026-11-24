@@ -1,14 +1,25 @@
 package dev.atlasmod.ui;
 
 /**
- * Stub for the Deep Mode tabs shown in the fullscreen Atlas screen.
+ * The tabs shown in the fullscreen Atlas screen.
  * Each tab represents a different view of the selected entry.
  */
 public enum DeepModeTab {
-    CRAFT,
-    USE,
-    SOURCES,
-    ALTERNATIVES,
-    UNLOCKS,
-    NOTES
+    CRAFT("Craft"),
+    USE("Uses"),
+    SOURCES("Sources"),
+    TREE("Tree"),
+    ALTERNATIVES("Alternatives"),
+    UNLOCKS("Unlocks"),
+    NOTES("Notes");
+
+    private final String label;
+
+    DeepModeTab(String label) {
+        this.label = label;
+    }
+
+    public String label() {
+        return label;
+    }
 }

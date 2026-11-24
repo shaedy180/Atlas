@@ -6,7 +6,7 @@ package dev.atlasmod.core.visibility;
 public enum VisibilityPolicy {
     /** Always visible with full details. */
     VISIBLE,
-    /** Shown but greyed out — requirements displayed. */
+    /** Shown but greyed out - requirements displayed. */
     GREYED_OUT,
     /** Completely hidden from results. */
     HIDDEN,

@@ -5,13 +5,15 @@ import dev.atlasmod.core.entry.IngredientKey;
 import dev.atlasmod.core.entry.StationKey;
 import dev.atlasmod.core.unlock.UnlockCondition;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 /**
  * Represents a single recipe node in the Atlas knowledge graph.
- * This is a semantic data object — Atlas renders the UI from this, not from
+ * This is a semantic data object. Atlas renders the UI from this, not from
  * mod-provided screens.
  */
 public final class RecipeNode {
@@ -20,6 +22,7 @@ public final class RecipeNode {
     private final String categoryId;
     private final List<IngredientKey> inputs;
     private final List<EntryKey> outputs;
+    private final int outputCount;
     private final StationKey station;
     private final int processingTime;
     private final int energyCost;
@@ -33,6 +36,7 @@ public final class RecipeNode {
         this.categoryId = builder.categoryId;
         this.inputs = List.copyOf(builder.inputs);
         this.outputs = List.copyOf(builder.outputs);
+        this.outputCount = Math.max(1, builder.outputCount);
         this.station = builder.station;
         this.processingTime = builder.processingTime;
         this.energyCost = builder.energyCost;
@@ -46,6 +50,8 @@ public final class RecipeNode {
     public String categoryId() { return categoryId; }
     public List<IngredientKey> inputs() { return inputs; }
     public List<EntryKey> outputs() { return outputs; }
+    /** How many of the first output one craft produces. */
+    public int outputCount() { return outputCount; }
     public Optional<StationKey> station() { return Optional.ofNullable(station); }
     public int processingTime() { return processingTime; }
     public int energyCost() { return energyCost; }
@@ -56,6 +62,20 @@ public final class RecipeNode {
     public Optional<UnlockCondition> unlockCondition() { return Optional.ofNullable(unlockCondition); }
     public List<AcquisitionSource> sources() { return sources; }
 
+    /** Inputs grouped by ingredient with their per-craft amount. Empty grid slots are skipped. */
+    public Map<IngredientKey, Integer> ingredientCounts() {
+        Map<IngredientKey, Integer> counts = new LinkedHashMap<>();
+        for (IngredientKey input : inputs) {
+            if (!input.isEmpty()) counts.merge(input, 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    /** Whether this recipe produces the given entry. */
+    public boolean produces(EntryKey entry) {
+        return outputs.contains(entry);
+    }
+
     public static Builder builder(String id, String categoryId) {
         return new Builder(id, categoryId);
     }
@@ -65,6 +85,7 @@ public final class RecipeNode {
         private final String categoryId;
         private List<IngredientKey> inputs = List.of();
         private List<EntryKey> outputs = List.of();
+        private int outputCount = 1;
         private StationKey station;
         private int processingTime;
         private int energyCost;
@@ -80,6 +101,7 @@ public final class RecipeNode {
 
         public Builder inputs(List<IngredientKey> inputs) { this.inputs = inputs; return this; }
         public Builder outputs(List<EntryKey> outputs) { this.outputs = outputs; return this; }
+        public Builder outputCount(int count) { this.outputCount = count; return this; }
         public Builder station(StationKey station) { this.station = station; return this; }
         public Builder processingTime(int ticks) { this.processingTime = ticks; return this; }
         public Builder energyCost(int energy) { this.energyCost = energy; return this; }
