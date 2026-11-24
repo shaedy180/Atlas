@@ -223,12 +223,13 @@ public final class QuickModeOverlay {
         ui.begin(QuickModeOverlay::select);
         drawOverlay(gfx, screen, mouseX, mouseY);
         PlanTracker.draw(ui, gfx, screen, mouseX, mouseY, panelX(screen));
+        ui.end();
         ui.tooltips(gfx, screen.getFont(), mouseX, mouseY);
     }
 
     /** Ends a resize drag. Always lets the event through. */
     public static void handleRelease(MouseButtonEvent event) {
-        if (event.button() == 0) draggingResize = false;
+        if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) draggingResize = false;
     }
 
     /**
@@ -260,7 +261,7 @@ public final class QuickModeOverlay {
      * Returns true if the click was consumed.
      */
     public static boolean handleClick(Screen screen, MouseButtonEvent event) {
-        if (!enabled || !(screen instanceof AbstractContainerScreen<?>) || event.button() != 0) return false;
+        if (!enabled || !(screen instanceof AbstractContainerScreen<?>) || event.button() != InputConstants.MOUSE_BUTTON_LEFT) return false;
 
         double mouseX = event.x();
         double mouseY = event.y();

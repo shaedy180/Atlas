@@ -14,6 +14,10 @@ import java.util.function.Consumer;
 /**
  * Small immediate mode helper: things are drawn and registered as clickable in
  * the same call, and clicks are matched against what was drawn last frame.
+ * <p>
+ * Each frame builds a fresh list that is only published once the frame is
+ * done, so input that arrives on another thread (some performance mods poll
+ * input separately) never sees a half built or cleared list.
  */
 public final class Ui {
 
@@ -34,14 +38,15 @@ public final class Ui {
         }
     }
 
-    private final List<Hit> hits = new ArrayList<>();
+    private List<Hit> hits = new ArrayList<>();
+    private volatile List<Hit> published = List.of();
     private Consumer<EntryKey> navigator = e -> {};
     private int clipTop = Integer.MIN_VALUE;
     private int clipBottom = Integer.MAX_VALUE;
 
     /** Starts a frame. Item clicks call the navigator. */
     public void begin(Consumer<EntryKey> navigator) {
-        hits.clear();
+        hits = new ArrayList<>();
         this.navigator = navigator;
         unclip();
     }
@@ -100,10 +105,16 @@ public final class Ui {
         add(new Hit(x, y, w, h, action, ItemStack.EMPTY, List.of()));
     }
 
+    /** Makes this frame's clickable areas the ones clicks are matched against. */
+    public void end() {
+        published = List.copyOf(hits);
+    }
+
     /** Runs the topmost click action under the mouse. */
     public boolean click(double mouseX, double mouseY) {
-        for (int i = hits.size() - 1; i >= 0; i--) {
-            Hit hit = hits.get(i);
+        List<Hit> current = published;
+        for (int i = current.size() - 1; i >= 0; i--) {
+            Hit hit = current.get(i);
             if (hit.onClick != null && hit.contains(mouseX, mouseY)) {
                 hit.onClick.run();
                 return true;

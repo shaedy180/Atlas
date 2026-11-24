@@ -10,6 +10,8 @@ else
   mapfile -t versions < <(ls versions/*.properties | xargs -n1 basename | sed 's/\.properties$//' | sort -V)
 fi
 
+mod_version=$(sed -n 's/^mod_version *= *//p' gradle.properties)
+
 rm -rf build/dist
 mkdir -p build/dist
 
@@ -17,7 +19,7 @@ for mc in "${versions[@]}"; do
   echo "=== Minecraft $mc"
   ./gradlew build --no-daemon -Pmc="$mc"
   found=0
-  for jar in atlas-loader-*/build/libs/atlas-*+"$mc".jar; do
+  for jar in atlas-loader-*/build/libs/atlas-*-"$mod_version"+"$mc".jar; do
     [ -e "$jar" ] || continue
     cp "$jar" build/dist/
     found=1

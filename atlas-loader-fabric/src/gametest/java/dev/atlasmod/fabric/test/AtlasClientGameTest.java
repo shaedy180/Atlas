@@ -1,8 +1,11 @@
 package dev.atlasmod.fabric.test;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import dev.atlasmod.api.AtlasApi;
 import dev.atlasmod.client.AtlasClient;
 import dev.atlasmod.client.AtlasScreen;
+import dev.atlasmod.client.QuickModeOverlay;
+import dev.atlasmod.client.compat.McCompat;
 import dev.atlasmod.core.entry.EntryKey;
 import dev.atlasmod.core.plan.CraftingPlan;
 import dev.atlasmod.ui.DeepModeTab;
@@ -56,6 +59,16 @@ public final class AtlasClientGameTest implements FabricClientGameTest {
                 context.takeScreenshot("atlas-" + tab.name().toLowerCase());
             }
 
+            // Real mouse clicks on the hand drawn tab buttons
+            context.setScreen(() -> new AtlasScreen(PICKAXE, DeepModeTab.CRAFT));
+            context.waitTicks(5);
+            clickTab(context, DeepModeTab.TREE);
+            check(context.computeOnClient(mc -> ((AtlasScreen) McCompat.currentScreen()).activeTab()) == DeepModeTab.TREE,
+                    "clicking the Tree tab did not switch tabs");
+            clickTab(context, DeepModeTab.SOURCES);
+            check(context.computeOnClient(mc -> ((AtlasScreen) McCompat.currentScreen()).activeTab()) == DeepModeTab.SOURCES,
+                    "clicking the Sources tab did not switch tabs");
+
             context.runOnClient(mc -> {
                 AtlasClient.buildPlans().pin(PICKAXE, 1);
                 AtlasClient.notes().add(PICKAXE, "Test note from the game test");
@@ -78,12 +91,56 @@ public final class AtlasClientGameTest implements FabricClientGameTest {
             context.waitTicks(30);
             context.takeScreenshot("inventory-quick-mode");
 
+            // A real click into the Quick Mode search field (default panel width 130)
+            double[] search = context.computeOnClient(mc -> {
+                double scale = mc.getWindow().getGuiScale();
+                return new double[]{(mc.getWindow().getGuiScaledWidth() - 69) * scale, 28 * scale};
+            });
+            context.getInput().setCursorPos(search[0], search[1]);
+            context.waitTick();
+            context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+            context.waitTicks(3);
+            check(context.computeOnClient(mc -> QuickModeOverlay.isTyping()), "clicking the Quick Mode search did nothing");
+            context.getInput().typeChars("stick");
+            context.waitTicks(3);
+            context.takeScreenshot("inventory-quick-search");
+
             context.runOnClient(mc -> {
                 AtlasClient.buildPlans().unpin(PICKAXE);
                 AtlasClient.notes().remove(PICKAXE, 0);
             });
             context.setScreen(() -> null);
         }
+    }
+
+    /** Clicks a Deep Mode tab, using the same layout as AtlasScreen. */
+    private static void clickTab(ClientGameTestContext context, DeepModeTab target) {
+        double[] pos = context.computeOnClient(mc -> {
+            var font = mc.font;
+            int width = mc.getWindow().getGuiScaledWidth();
+            int startX = width * 45 / 100 + 6;
+            int right = width - 6;
+            int x = startX;
+            int y = 32;
+            for (DeepModeTab tab : DeepModeTab.values()) {
+                int w = font.width(tab.label()) + 8;
+                if (x + w > right) {
+                    x = startX;
+                    y += 14;
+                }
+                if (tab == target) {
+                    double scale = mc.getWindow().getGuiScale();
+                    return new double[]{(x + w / 2.0) * scale, (y + 6) * scale};
+                }
+                x += w + 2;
+            }
+            throw new IllegalStateException();
+        });
+        context.getInput().setCursorPos(pos[0], pos[1]);
+        context.waitTick();
+        // The real left button code: 0 with GLFW, 1 with SDL (26.3)
+        context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+        context.waitTicks(3);
     }
 
     private static void check(boolean condition, String message) {
