@@ -177,6 +177,10 @@ public class AtlasScreen extends Screen {
         super.removed();
     }
 
+    public DeepModeTab activeTab() {
+        return activeTab;
+    }
+
     private int panelDividerX() {
         return width * PANEL_DIVIDER_X_RATIO / 100;
     }
@@ -307,6 +311,7 @@ public class AtlasScreen extends Screen {
 
         super.extractRenderState(gfx, mouseX, mouseY, partialTick);
         drawFilterChips(gfx, dividerX);
+        ui.end();
 
         if (showHelp) {
             drawHelpOverlay(gfx);
@@ -1138,11 +1143,11 @@ public class AtlasScreen extends Screen {
             showHelp = false;
             return true;
         }
-        if (super.mouseClicked(event, doubleClick)) return true;
-
         double mouseX = event.x();
         double mouseY = event.y();
-        if (event.button() == 0 && ui.click(mouseX, mouseY)) return true;
+        // Atlas' own buttons first, so widgets added by other mods can not swallow them
+        if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && ui.click(mouseX, mouseY)) return true;
+        if (super.mouseClicked(event, doubleClick)) return true;
 
         int dividerX = panelDividerX();
         int startY = gridTop();
@@ -1153,7 +1158,7 @@ public class AtlasScreen extends Screen {
             int idx = (row + scrollOffset) * gridColumns + col;
             if (col < gridColumns && idx >= 0 && idx < searchResults.size()) {
                 EntryKey entry = searchResults.get(idx);
-                if (event.button() == 1) {
+                if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
                     // Right click goes straight to the uses
                     navigate(entry);
                     activeTab = DeepModeTab.USE;
