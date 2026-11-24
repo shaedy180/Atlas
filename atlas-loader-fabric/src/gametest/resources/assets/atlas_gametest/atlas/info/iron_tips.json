@@ -1,0 +1,8 @@
+{
+  "title": "Iron in this pack",
+  "items": ["minecraft:iron_ingot", "minecraft:iron_pickaxe", "#minecraft:iron_ores"],
+  "lines": [
+    "Iron spawns a lot around Y 15 and in mountains.",
+    "Smelt raw iron in a blast furnace to save time."
+  ]
+}
